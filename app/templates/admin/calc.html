@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ t('trigger_calc') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3 style="margin-top:0">{{ t('calc_title') }}</h3>
+  <p class="muted">{{ t('calc_note') }}</p>
+  <div class="inline">
+    <a class="btn secondary" href="/admin/calc/template.csv">{{ t('calc_template') }}</a>
+  </div>
+  <p class="muted">{{ t('calc_cols_note') }}</p>
+  <form class="inline" method="post" action="/admin/calc/preview" enctype="multipart/form-data">
+    <div><label>CSV</label><input type="file" name="file" accept=".csv" required></div>
+    <button class="btn" type="submit">{{ t('upload_preview') }}</button>
+  </form>
+</div>
+{% endblock %}

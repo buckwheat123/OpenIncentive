@@ -1,0 +1,8 @@
+period,employee_id,name,plan_name,kpi_name,weight_pct,quota,curve_name
+2026-Q4,E005,周芳,Sales Incentive,Revenue,60,1000000,Standard Curve
+2026-Q4,E005,周芳,Sales Incentive,Customer Satisfaction,40,90,Quality Curve
+2026-Q4,E006,吴迪,Sales Incentive,Revenue,60,950000,Standard Curve
+2026-Q4,E006,吴迪,Sales Incentive,Customer Satisfaction,40,90,Quality Curve
+2026-Q4,E007,罗歌,销售激励计划CENTRAL,Revenue1,30,100,Standard Curve
+2026-Q4,E007,罗歌,销售激励计划CENTRAL,Revenue2,30,100,CurveX
+2026-Q4,E007,罗歌,销售激励计划CENTRAL,Customer Satisfaction,40,90,Quality Curve

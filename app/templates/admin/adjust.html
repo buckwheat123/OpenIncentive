@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ t('special_adjustments') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>{{ t('adjust_title') }}</h3>
+  <p class="muted">{{ t('adjust_note') }}</p>
+  <form class="inline" method="post" action="/admin/adjust">
+    <div><label>{{ t('employee_id') }} / {{ t('name') }}</label>
+      <select name="employee_id" required>
+        {% for e in employees %}<option value="{{ e.id }}">{{ e.employee_id }} {{ e.name }}（{{ tl(e.bg) or '-' }}）</option>{% endfor %}
+      </select>
+    </div>
+    <div><label>{{ t('period') }}</label>
+      <select name="period" required>{% for p in periods %}<option value="{{ p }}">{{ p }}</option>{% endfor %}</select>
+    </div>
+    <div><label>{{ t('adjust_delta') }}</label><input name="adjustment_pct" type="number" step="0.01" required placeholder="+10 / -5"></div>
+    <div><label>{{ t('reason_required') }}</label><input name="reason" required></div>
+    <button class="btn" type="submit">{{ t('record_adjust') }}</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>{{ t('batch_upload') }}</h3>
+  <p class="muted">{{ t('batch_note') }}</p>
+  <div class="inline">
+    <a class="btn secondary" href="/admin/adjust/template.csv">{{ t('adjust_template') }}</a>
+  </div>
+  <form class="inline" method="post" action="/admin/adjust/preview" enctype="multipart/form-data">
+    <div><label>CSV</label><input type="file" name="file" accept=".csv" required></div>
+    <button class="btn" type="submit">{{ t('upload_preview') }}</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>{{ t('adjust_logs') }}</h3>
+  <table>
+    <tr><th>{{ t('time') }}</th><th>{{ t('employee_id') }} / {{ t('name') }}</th><th>{{ t('period') }}</th>
+        <th class="right">{{ t('adjust_delta') }}</th><th>{{ t('reason') }}</th><th>{{ t('operator') }}</th></tr>
+    {% for a in adjustments %}
+    <tr>
+      <td>{{ a.created_at|fmt }}</td>
+      <td>{{ a.employee.name }}（{{ a.employee.employee_id }}）</td>
+      <td>{{ a.period }}</td>
+      <td class="right">{{ '%+g'|format(a.adjustment_pct) }}</td>
+      <td>{{ a.reason }}</td>
+      <td>{{ a.creator.name if a.creator else '-' }}</td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="muted">{{ t('no_adjusts') }}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

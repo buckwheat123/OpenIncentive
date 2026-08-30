@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ t('calc_runs') }} #{{ run.id }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ t('calc_runs') }} #{{ run.id }} <span class="muted">{{ run.period }} · {{ run.created_at|fmt }}
+    · {{ run.creator.name if run.creator else '-' }}{% if run.note %} · {{ run.note }}{% endif %}</span></h2>
+  {% for r in results %}
+  <h3>{{ r.employee.name }}（{{ r.employee.employee_id }} / {{ tl(r.employee.bg) }}） · {{ tl(r.plan_name) }}
+    {% if r.adjusted %}<span class="tag warn">{{ t('special_adjust') }}</span>{% endif %}</h3>
+  <table>
+    <tr><th>KPI</th><th class="right">{{ t('target') }}</th><th class="right">{{ t('actual_col') }}</th>
+        <th class="right">{{ t('attainment') }}</th><th>Curve</th><th class="right">{{ t('weight_col') }}</th>
+        <th class="right">{{ t('payout_rate') }}</th></tr>
+    {% for d in json.loads(r.detail_json) %}
+    <tr>
+      <td>{{ tl(d.kpi) }}</td>
+      <td class="right">{{ d.quota|num }}</td>
+      <td class="right">{% if d.actual is not none %}{{ d.actual|num }}{% else %}-{% endif %}</td>
+      <td class="right">{{ d.attainment_pct }}%</td>
+      <td>{{ tl(d.curve) }}</td>
+      <td class="right">{{ d.weight_pct|g }}%</td>
+      <td class="right">{{ d.rate_pct }}%</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p>{{ t('unweighted_rate') }} {{ r.unweighted_rate_pct }}% · {{ t('weighted_rate') }} {{ r.weighted_rate_pct }}%
+     {% if r.adjusted %} · {{ t('special_adjust') }} {{ '%+g'|format(r.adjustment_pct) }} pp{% endif %}
+     → {{ t('quarter_total_rate') }} <strong>{{ r.final_rate_pct }}%</strong></p>
+  {% else %}
+  <p class="muted">{{ t('no_results') }}</p>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ t('preview_result') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ t('preview_result') }}</h2>
+  <p class="muted">{{ t('preview_note') }}</p>
+  <table>
+    <tr><th>{{ t('period') }}</th><th>{{ t('employee_id') }} / {{ t('name') }}</th><th>{{ t('status') }}</th><th>{{ t('note') }}</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.period }}</td>
+      <td>{% if r.employee %}{{ r.employee.employee_id }} {{ r.employee.name }}{% else %}{{ r.emp_ext }}{% endif %}</td>
+      <td>{% if r.ok %}<span class="tag ok">{{ r.status }}</span>{% else %}<span class="tag warn">{{ r.status }}</span>{% endif %}</td>
+      <td>{{ r.note }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+<div class="card">
+  <h3>{{ t('confirm_execute') }}</h3>
+  <form method="post" action="/admin/calc/execute"
+        onsubmit="return confirm('{{ t('confirm_calc_exec') }}')">
+    <textarea name="csv_text" style="display:none">{{ csv_text }}</textarea>
+    <div class="inline">
+      <div><label>{{ t('note') }}</label><input name="note" placeholder="{{ t('optional') }}"></div>
+      <button class="btn" type="submit">{{ t('confirm_execute') }}</button>
+      <a class="btn secondary" href="/admin/calc">{{ t('back') }}</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

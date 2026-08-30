@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ t('admin_console') }}{% endblock %}
+{% block content %}
+<div class="grid">
+  <a class="card" href="/admin/import">{{ t('csv_import') }}</a>
+  <a class="card" href="/admin/calc">{{ t('trigger_calc') }}</a>
+  <a class="card" href="/admin/data">{{ t('data_delete') }}</a>
+  <a class="card" href="/admin/curves">{{ t('curve_mgmt') }}</a>
+  <a class="card" href="/admin/adjust">{{ t('special_adjustments') }}</a>
+  <a class="card" href="/admin/users">{{ t('user_mgmt') }}</a>
+  <a class="card" href="/admin/export">{{ t('export_results') }}</a>
+  <a class="card" href="/admin/labels">{{ t('language_mgmt') }}</a>
+</div>
+
+<div class="card">
+  <h3>{{ t('trigger_bonus_calc') }}</h3>
+  <form class="inline" method="post" action="/admin/runs">
+    <div><label>{{ t('period') }}</label>
+      <input name="period" list="period-list" placeholder="{{ t('period_placeholder') }}" required>
+      <datalist id="period-list">{% for p in periods %}<option value="{{ p }}">{% endfor %}</datalist>
+    </div>
+    <div><label>{{ t('note') }}</label><input name="note" placeholder="{{ t('optional') }}"></div>
+    <button class="btn" type="submit">{{ t('trigger') }}</button>
+  </form>
+  <table>
+    <tr><th>#</th><th>{{ t('period') }}</th><th>{{ t('operator') }}</th><th>{{ t('time') }}</th><th>{{ t('note') }}</th></tr>
+    {% for r in runs %}
+    <tr><td><a href="/admin/runs/{{ r.id }}">{{ r.id }}</a></td><td>{{ r.period }}</td>
+        <td>{{ r.creator.name if r.creator else '-' }}</td><td>{{ r.created_at|fmt }}</td><td>{{ r.note }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">{{ t('no_runs') }}</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h3>{{ t('sealing') }}</h3>
+  <form class="inline" method="post" action="/admin/locks"
+        onsubmit="return confirm('{{ t('confirm_seal') }}')">
+    <div><label>{{ t('period') }}</label><input name="period" list="period-list" required></div>
+    <div><label>{{ t('bg') }}</label>
+      <select name="bg">{% for b in bgs %}<option value="{{ b }}">{{ tl(b) }}</option>{% endfor %}</select>
+    </div>
+    <button class="btn danger" type="submit">{{ t('seal') }}</button>
+  </form>
+  <table>
+    <tr><th>{{ t('period') }}</th><th>{{ t('bg') }}</th><th>{{ t('sealed_by') }}</th><th>{{ t('time') }}</th></tr>
+    {% for l in locks %}
+    <tr><td>{{ l.period }}</td><td>{{ tl(l.bg) }}</td><td>{{ l.locker.name if l.locker else '-' }}</td><td>{{ l.locked_at|fmt }}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">{{ t('no_seals') }}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

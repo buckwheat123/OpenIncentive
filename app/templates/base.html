@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="{{ 'zh-CN' if lang == 'zh' else 'en' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ t('app_title') }}{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">{{ t('app_title') }}</div>
+  <nav>
+    {% if user %}
+      {% if user.role == 'ADMIN' %}<a href="/admin">{{ t('admin_console') }}</a>{% endif %}
+      {% if user.role in ('BG_ADMIN', 'ADMIN') %}<a href="/bg">{{ t('bg_view') }}</a><a href="/letters">{{ t('letters') }}</a>{% endif %}
+      {% if user.role in ('MANAGER', 'ADMIN') %}<a href="/team">{{ t('team') }}</a>{% endif %}
+      <a href="/me">{{ t('my_bonus') }}</a>
+      <span class="who">{{ user.name }}（{{ user.role }}）</span>
+      <a class="btn small" href="/logout">{{ t('logout') }}</a>
+    {% endif %}
+    <span class="lang-switch">
+      <a class="{% if lang == 'zh' %}active{% endif %}" href="/lang/zh">中</a>
+      <a class="{% if lang == 'en' %}active{% endif %}" href="/lang/en">EN</a>
+    </span>
+  </nav>
+</header>
+<main>
+  {% set msg = request.query_params.get('msg') %}
+  {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ t('team') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ t('my_team') }} <span class="muted">（{{ t('team_depth_note') }}）</span></h2>
+  <form class="inline" method="get">
+    <div><label>{{ t('period') }}</label>
+      <select name="period" onchange="this.form.submit()">
+        {% for p in periods %}<option value="{{ p }}" {% if p == period %}selected{% endif %}>{{ p }}</option>{% endfor %}
+      </select>
+    </div>
+    <div><label>{{ t('level_filter') }}</label>
+      <select name="level" onchange="this.form.submit()">
+        <option value="">{{ t('all') }}</option>
+        {% for lv in levels %}<option value="{{ lv }}" {% if lv == level %}selected{% endif %}>{{ lv }}</option>{% endfor %}
+      </select>
+    </div>
+    <div><label>{{ t('sort') }}</label>
+      <select name="sort" onchange="this.form.submit()">
+        <option value="level" {% if sort == 'level' %}selected{% endif %}>{{ t('by_level') }}</option>
+        <option value="name" {% if sort == 'name' %}selected{% endif %}>{{ t('by_id') }}</option>
+        <option value="rate" {% if sort == 'rate' %}selected{% endif %}>{{ t('by_rate') }}</option>
+      </select>
+    </div>
+    {% if level %}<a class="btn secondary small" href="/team?period={{ period }}">{{ t('clear_filter') }}</a>{% endif %}
+  </form>
+  <p class="muted">{{ t('member_count', n=rows|length) }}{% if avg_rate is not none %} · {{ t('avg_rate') }} <strong>{{ avg_rate }}%</strong>{% endif %}</p>
+  <table>
+    <tr><th>{{ t('level') }}</th><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('bg') }}</th>
+        <th class="right">{{ t('weighted_rate') }}</th><th class="right">{{ t('quarter_total_rate') }}</th>
+        <th>{{ t('status') }}</th><th></th></tr>
+    {% for row in rows %}
+    <tr>
+      <td><span class="tag">{{ row.level }}</span></td>
+      <td>{{ row.emp.employee_id }}</td>
+      <td>{{ row.emp.name }}</td>
+      <td>{{ tl(row.emp.bg) or '-' }}</td>
+      <td class="right">{% if row.result %}{{ row.result.weighted_rate_pct }}%{% else %}-{% endif %}</td>
+      <td class="right">{% if row.result %}<strong>{{ row.result.final_rate_pct }}%</strong>{% else %}-{% endif %}</td>
+      <td>{% if row.result and row.result.adjusted %}<span class="tag warn">{{ t('special_adjust') }}</span>{% elif row.result %}<span class="tag ok">{{ t('calculated') }}</span>{% else %}<span class="tag">{{ t('not_calculated') }}</span>{% endif %}</td>
+      <td><a href="/person/{{ row.emp.id }}?year={{ period.split('-')[0] if period else '' }}">{{ t('detail') }}</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">{{ t('no_reports') }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

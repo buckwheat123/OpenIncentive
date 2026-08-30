@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ t('user_mgmt') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>{{ t('create_user') }}</h3>
+  <form class="inline" method="post" action="/admin/users">
+    <div><label>{{ t('employee_id') }}</label><input name="employee_id" required></div>
+    <div><label>{{ t('name') }}</label><input name="name" required></div>
+    <div><label>{{ t('email') }}</label><input name="email" type="email" required></div>
+    <div><label>{{ t('role') }}</label>
+      <select name="role">
+        <option>EMPLOYEE</option><option>MANAGER</option><option>BG_ADMIN</option><option>ADMIN</option>
+      </select>
+    </div>
+    <div><label>{{ t('bg') }}</label><input name="bg"></div>
+    <div><label>{{ t('department') }}</label><input name="department"></div>
+    <div><label>{{ t('job_title') }}</label><input name="job_title"></div>
+    <div><label>{{ t('initial_password') }}</label><input name="password"></div>
+    <button class="btn" type="submit">{{ t('create') }}</button>
+  </form>
+</div>
+<div class="card">
+  <table>
+    <tr><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th><th>{{ t('role') }}</th>
+        <th>{{ t('bg') }}</th><th>{{ t('department') }}</th><th>{{ t('job_title') }}</th>
+        <th>{{ t('info_updated_at') }}</th><th>{{ t('status') }}</th><th></th></tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.employee_id }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
+      <td>{{ u.role }}</td><td>{{ tl(u.bg) or '-' }}</td>
+      <td>{{ tl(u.department) or '-' }}</td><td>{{ tl(u.job_title) or '-' }}</td>
+      <td>{{ u.updated_at|fmt }}</td>
+      <td>{% if u.is_active %}<span class="tag ok">{{ t('active') }}</span>{% else %}<span class="tag">{{ t('inactive') }}</span>{% endif %}</td>
+      <td>{% if u.id != user.id %}
+        <form method="post" action="/admin/users/{{ u.id }}/toggle" style="margin:0">
+          <button class="btn small secondary" type="submit">{% if u.is_active %}{{ t('disable') }}{% else %}{{ t('enable') }}{% endif %}</button>
+        </form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

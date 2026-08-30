@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ t('template') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ t('template') }} <a class="btn small" style="float:right" href="/letters/templates/new">{{ t('new_template') }}</a></h2>
+  <table>
+    <tr><th>{{ t('template_name') }}</th><th>{{ t('letter_subject') }}</th><th>{{ t('bg') }}</th><th>{{ t('updated_at') }}</th><th></th></tr>
+    {% for tpl in templates %}
+    <tr>
+      <td>{{ tpl.name }}</td><td>{{ tpl.subject }}</td><td>{{ tl(tpl.bg) }}</td><td>{{ tpl.updated_at|fmt }}</td>
+      <td><a href="/letters/templates/{{ tpl.id }}/edit">{{ t('edit') }}</a></td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">{{ t('no_templates') }}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ t('csv_import') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>{{ t('import_title') }}</h3>
+  <p class="muted">{{ t('import_one_to_three') }}</p>
+  <p class="muted">{{ t('import_note') }}</p>
+  <form method="post" action="/admin/import" enctype="multipart/form-data">
+    <div class="inline">
+      <div><label>{{ t('employees_file') }}</label><input type="file" name="employees" accept=".csv"></div>
+      <div><label>{{ t('plans_file') }}</label><input type="file" name="plans" accept=".csv"></div>
+      <div><label>{{ t('actuals_file') }}</label><input type="file" name="actuals" accept=".csv"></div>
+      <button class="btn" type="submit">{{ t('import_submit') }}</button>
+    </div>
+  </form>
+  <h3>{{ t('format_docs') }}</h3>
+  <p><strong>employees.csv</strong>：{{ t('fmt_employees') }}</p>
+  <p><strong>plans.csv</strong>：{{ t('fmt_plans') }}</p>
+  <p><strong>actuals.csv</strong>：{{ t('fmt_actuals') }}</p>
+  <p class="muted">{{ t('fmt_note') }}</p>
+</div>
+{% endblock %}

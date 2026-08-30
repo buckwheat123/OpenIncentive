@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ t('export_results') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3 style="margin-top:0">{{ t('export_title') }}</h3>
+  <form class="inline" method="get" action="/admin/export.csv">
+    <div><label>{{ t('year') }}</label>
+      <select name="year">
+        <option value="">{{ t('all_years') }}</option>
+        {% for y in years %}<option value="{{ y }}">{{ y }}</option>{% endfor %}
+      </select>
+    </div>
+    <div><label>{{ t('bg') }}</label>
+      <select name="bg">
+        <option value="">{{ t('all_bgs') }}</option>
+        {% for b in bgs %}<option value="{{ b }}">{{ tl(b) }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn" type="submit">{{ t('download_csv') }}</button>
+  </form>
+  <p class="muted">{{ t('export_note') }}</p>
+</div>
+{% endblock %}

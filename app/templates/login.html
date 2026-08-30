@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="{{ 'zh-CN' if lang == 'zh' else 'en' }}">
+<head>
+<meta charset="utf-8">
+<title>{{ t('login') }} - {{ t('app_title') }}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="login-box">
+  <h2 style="margin-top:0">{{ t('app_title') }}</h2>
+  <div style="margin-bottom:12px" class="lang-switch">
+    <a class="{% if lang == 'zh' %}active{% endif %}" href="/lang/zh">中</a>
+    <a class="{% if lang == 'en' %}active{% endif %}" href="/lang/en">EN</a>
+  </div>
+  {% if error %}<div class="msg">{{ t('login_error') }}</div>{% endif %}
+  <form method="post" action="/login">
+    <label>{{ t('login_id_label') }}</label>
+    <input name="login_id" required autofocus>
+    <label>{{ t('password') }}</label>
+    <input name="password" type="password" required>
+    <button class="btn" type="submit">{{ t('login') }}</button>
+  </form>
+</div>
+</body>
+</html>

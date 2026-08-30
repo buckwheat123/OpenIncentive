@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ t('compose_letter') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ t('compose_letter') }}</h2>
+  <form method="post" action="/letters/send">
+    <div class="inline">
+      <div><label>{{ t('template') }}</label>
+        <select name="template_id" required>
+          {% for tpl in templates %}<option value="{{ tpl.id }}">{{ tpl.name }}（{{ tpl.subject }}）</option>{% endfor %}
+        </select>
+      </div>
+      <div><label>{{ t('period') }}</label>
+        <select name="period" required>{% for p in periods %}<option value="{{ p }}">{{ p }}</option>{% endfor %}</select>
+      </div>
+    </div>
+    <label>{{ t('message') }}</label>
+    <input name="message" style="width:100%">
+
+    <p style="margin:12px 0 6px"><strong>{{ t('recipients') }}</strong>
+      <span class="muted">· {{ t('shift_hint') }}</span></p>
+    <div class="inline" style="margin:0 0 8px">
+      <label style="display:flex;gap:6px;align-items:center;margin:0">
+        <input type="checkbox" id="select-all"> {{ t('select_all') }}
+      </label>
+      <input id="member-filter" placeholder="{{ t('filter_placeholder') }}" style="min-width:260px">
+      <span class="muted" id="sel-count" data-pattern="{{ t('selected_count', n='__N__') }}"></span>
+    </div>
+    <div class="pick-list" id="member-list">
+      {% for m in members %}
+      <label data-search="{{ m.employee_id }} {{ m.name }} {{ m.bg or '' }} {{ tl(m.bg) }} {{ m.department or '' }} {{ m.role }}">
+        <input type="checkbox" name="recipients" value="{{ m.id }}">
+        {{ m.employee_id }} {{ m.name }}（{{ tl(m.bg) or '-' }}{% if m.department %} · {{ tl(m.department) }}{% endif %}）
+      </label>
+      {% endfor %}
+    </div>
+    <p style="margin-top:14px">
+      <button class="btn" type="submit" onclick="return confirm('{{ t('confirm_send') }}')">{{ t('send') }}</button>
+      <a class="btn secondary" href="/letters">{{ t('cancel') }}</a>
+    </p>
+  </form>
+</div>
+<script>
+(function () {
+  var filterBox = document.getElementById('member-filter');
+  var selectAll = document.getElementById('select-all');
+  var list = document.getElementById('member-list');
+  var counter = document.getElementById('sel-count');
+  var labels = Array.prototype.slice.call(list.querySelectorAll('label'));
+  var lastClicked = null;
+
+  function visible() { return labels.filter(function (l) { return !l.classList.contains('hidden'); }); }
+  function updateCounter() {
+    var n = labels.filter(function (l) { return l.querySelector('input').checked; }).length;
+    counter.textContent = counter.dataset.pattern.replace('__N__', n);
+    selectAll.checked = n > 0 && n === visible().length;
+  }
+  filterBox.addEventListener('input', function () {
+    var q = filterBox.value.trim().toLowerCase();
+    labels.forEach(function (l) {
+      var hit = !q || l.dataset.search.toLowerCase().indexOf(q) >= 0;
+      l.classList.toggle('hidden', !hit);
+    });
+  });
+  selectAll.addEventListener('change', function () {
+    visible().forEach(function (l) { l.querySelector('input').checked = selectAll.checked; });
+    updateCounter();
+  });
+  labels.forEach(function (l) {
+    var cb = l.querySelector('input');
+    cb.addEventListener('click', function (e) {
+      if (e.shiftKey && lastClicked) {
+        var vis = visible();
+        var a = vis.indexOf(lastClicked), b = vis.indexOf(l);
+        if (a >= 0 && b >= 0) {
+          var s = Math.min(a, b), t2 = Math.max(a, b);
+          for (var i = s; i <= t2; i++) vis[i].querySelector('input').checked = cb.checked;
+        }
+      }
+      lastClicked = l;
+      updateCounter();
+    });
+  });
+  updateCounter();
+})();
+</script>
+{% endblock %}

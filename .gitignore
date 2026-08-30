@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+.venv/
+venv/
+
+# Runtime data: database, session signing key, local outbox (NEVER publish)
+data/
+
+# Local logs & personal notes
+server.log
+*.log
+命令行.txt
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db

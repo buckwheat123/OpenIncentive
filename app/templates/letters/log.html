@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ t('letter_log') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ t('letter_log') }}
+    {% if user.role == 'BG_ADMIN' %}<a class="btn small" style="float:right" href="/letters/compose">{{ t('compose_letter') }}</a>{% endif %}
+  </h2>
+  <table>
+    <tr><th>{{ t('recipient') }}</th><th>{{ t('period') }}</th><th>{{ t('letter_subject') }}</th><th>{{ t('template') }}</th>
+        <th>{{ t('sent_at') }}</th><th>{{ t('send_mode') }}</th><th>{{ t('read_at') }}</th><th></th></tr>
+    {% for l in letters %}
+    <tr>
+      <td>{{ l.recipient.name }}（{{ l.recipient.employee_id }}）</td>
+      <td>{{ l.period }}</td>
+      <td>{{ l.subject }}</td>
+      <td>{{ l.template_name }}</td>
+      <td>{{ l.sent_at|fmt }}</td>
+      <td>{% if l.send_mode == 'smtp' %}<span class="tag ok">{{ t('mode_smtp') }}</span>{% else %}<span class="tag">{{ t('mode_outbox') }}</span>{% endif %}</td>
+      <td>{% if l.read_at %}{{ l.read_at|fmt }}{% else %}<span class="muted">{{ t('unread') }}</span>{% endif %}</td>
+      <td><a href="/letter/{{ l.token }}">{{ t('detail') }}</a></td>
+    </tr>
+    {% else %}<tr><td colspan="8" class="muted">{{ t('no_letters') }}</td></tr>{% endfor %}
+  </table>
+  <p class="muted"><a href="/letters/templates">{{ t('templates_link') }}</a></p>
+</div>
+{% endblock %}

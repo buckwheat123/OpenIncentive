@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ t('data_delete') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3 style="margin-top:0">{{ t('delete_title') }}</h3>
+  <p class="muted">{{ t('delete_note') }}</p>
+  <div class="inline">
+    <a class="btn secondary" href="/admin/data/delete-template.csv?entity=actual">{{ t('actual_template') }}</a>
+    <a class="btn secondary" href="/admin/data/delete-template.csv?entity=plan">{{ t('plan_template') }}</a>
+  </div>
+</div>
+
+<div class="card">
+  <h3>{{ t('upload') }}</h3>
+  <form class="inline" method="post" action="/admin/data/delete" enctype="multipart/form-data">
+    <div><label>{{ t('target_entity') }}</label>
+      <select name="entity">
+        <option value="actual">{{ t('actual') }}</option>
+        <option value="plan">{{ t('plan') }}</option>
+      </select>
+    </div>
+    <div><label>CSV</label><input type="file" name="file" accept=".csv" required></div>
+    <button class="btn danger" type="submit">{{ t('delete') }}</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>{{ t('deletion_logs') }}</h3>
+  <table>
+    <tr><th>{{ t('time') }}</th><th>{{ t('target_entity') }}</th><th>{{ t('entity_ref') }}</th><th>{{ t('reason') }}</th><th>{{ t('operator') }}</th></tr>
+    {% for l in logs %}
+    <tr>
+      <td>{{ l.created_at|fmt }}</td>
+      <td>{{ l.entity }}</td>
+      <td>{{ l.entity_ref }}</td>
+      <td>{{ l.reason }}</td>
+      <td>{{ l.creator.name if l.creator else '-' }}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">{{ t('no_logs') }}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

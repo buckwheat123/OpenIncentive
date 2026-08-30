@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="{{ 'zh-CN' if lang == 'zh' else 'en' }}">
+<head>
+<meta charset="utf-8">
+<title>{{ letter.subject }}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <div style="text-align:right;margin-bottom:8px" class="lang-switch">
+    <a class="{% if lang == 'zh' %}active{% endif %}" href="/lang/zh">中</a>
+    <a class="{% if lang == 'en' %}active{% endif %}" href="/lang/en">EN</a>
+  </div>
+  {% if request.query_params.get('msg') %}<div class="msg">{{ request.query_params.get('msg') }}</div>{% endif %}
+  <div class="card">
+    <h2 style="margin-top:0">{{ letter.subject }}</h2>
+    <p class="muted">{{ t('recipient') }}：{{ letter.recipient.name }} · {{ t('period') }}：{{ letter.period }} · {{ t('sent_at') }}：{{ letter.sent_at|fmt }}
+      · {{ t('template') }}：{{ letter.template_name }}{% if letter.read_at %} · {{ t('read_at') }}：{{ letter.read_at|fmt }}{% endif %}</p>
+  </div>
+  <div class="letter-body">{{ letter.body_html|safe }}</div>
+  {% if not letter.read_at %}
+    {% if can_ack %}
+    <form method="post" action="/letter/{{ letter.token }}/read" style="margin-top:16px">
+      <button class="btn" type="submit">{{ t('confirm_read') }}</button>
+    </form>
+    {% else %}
+    <p class="muted" style="margin-top:16px">{{ t('admin_preview_note') }}</p>
+    {% endif %}
+  {% else %}
+    <p class="muted" style="margin-top:16px">{{ t('already_confirmed') }}（{{ letter.read_at|fmt }}）</p>
+  {% endif %}
+</main>
+</body>
+</html>

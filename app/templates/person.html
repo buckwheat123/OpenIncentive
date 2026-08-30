@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ view_user.name }} - {{ t('bonus_detail') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ view_user.name }}
+    <span class="muted">{{ view_user.employee_id }} · {{ tl(view_user.bg) or '-' }}
+      {% if view_user.department %} · {{ tl(view_user.department) }}{% endif %}
+      {% if view_user.job_title %} · {{ tl(view_user.job_title) }}{% endif %}
+      {% if view_user.manager %} · {{ t('reports_to') }} {{ view_user.manager.name }}{% endif %}</span></h2>
+  <form class="inline" method="get">
+    <div><label>{{ t('year') }}</label>
+      <select name="year" onchange="this.form.submit()">
+        {% for y in years %}<option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>{% endfor %}
+      </select>
+    </div>
+    <span class="muted">{{ t('four_quarter_note') }}</span>
+  </form>
+</div>
+
+{% if plan_tables %}
+  {% for pt in plan_tables %}
+  <div class="card">
+    <h3 style="margin-top:0">{{ year }} {{ tl(pt.plan_name) }}</h3>
+    <table>
+      <tr><th>{{ t('metric') }}</th>{% for q in pt.quarters %}<th class="right">{{ q }}</th>{% endfor %}</tr>
+      {% for row in pt.rows %}
+      <tr{% if row.kind == 'summary' %} class="summary-row"{% endif %}>
+        <td>{% if row.kind == 'summary' %}<strong>{{ row.label }}</strong>{% else %}{{ row.label }}{% endif %}</td>
+        {% for cell in row.cells %}<td class="right">{{ cell or '-' }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="card"><p class="muted">{{ t('no_plans_year') }}</p></div>
+{% endif %}
+{% endblock %}
