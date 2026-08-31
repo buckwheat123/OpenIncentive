@@ -66,7 +66,7 @@ python -m venv .venv
 
 ## 本版核心规则
 
-- **计划以 `plan_name` 为身份**（v3 已移除 `stip_type`）：同一「期间 + 员工 + 计划名」的多个 KPI 行构成一个计划。
+- **计划以 `plan_name` 为身份**：同一「期间 + 员工 + 计划名」的多个 KPI 行构成一个计划。
 - **最终支付率 = 系统加权支付率 + 特殊调整（±百分点）**。调整为增量而非覆盖，可正可负。
 - **不存储奖金基数**，系统只计算到「季度 YTD 总支付率」，不计算应付金额。
 - **导入的实绩为 YTD 累计值**，系统不做季度间加总。
@@ -141,7 +141,7 @@ set SMTP_HOST=smtp.example.com& SMTP_PORT=587& SMTP_USER=...& SMTP_PASSWORD=...&
 ```
 app/            应用代码（db/models/curves/calc/csvio/i18n/mailer/security/deps/routers/templates）
 data/           SQLite 数据库、密钥、本地发件箱（运行生成）
-sample_data/    示例 CSV（v3 新格式：含 department/job_title，无 stip_type）
+sample_data/    示例 CSV（v3 新格式：含 department/job_title）
 seed.py         演示数据种子脚本（重建库，含演示翻译词条）
 run.py          开发服务器入口
 ```
