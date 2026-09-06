@@ -12,7 +12,8 @@ from sqlalchemy import select
 from ..calc import apply_adjustment, is_locked, run_calculation
 from ..csvio import (_csv_rows_for_calc_template, actual_delete_template_rows, adjustment_template_rows,
                      apply_deletions, big_error_rows, big_summary, big_template_rows, collect_originals,
-                     decode_csv, deletion_logs, execute_big_import, execute_user_import, export_results_rows,
+                     decode_csv, deletion_logs, execute_big_import, execute_user_import, export_kpi_rows,
+                     export_results_rows,
                      import_labels, label_rows, parse_adjustment_rows, parse_big_rows, parse_user_rows,
                      plan_delete_template_rows, recent_periods, resolve_employee, to_csv, user_error_rows,
                      user_summary, user_template_rows)
@@ -478,6 +479,16 @@ def export_csv(request: Request, period: str | None = None, bg: str | None = Non
     rows = export_results_rows(db, bg=bg or None, period=period or None, year=year or None,
                                lang=get_lang(request))
     name = "bonus_results" + (f"_{year}" if year else "") + (f"_{bg}" if bg else "") \
+           + (f"_{period}" if period else "") + ".csv"
+    return _csv_response(rows, name)
+
+
+@router.get("/export_kpi.csv")
+def export_kpi_csv(request: Request, period: str | None = None, bg: str | None = None, year: str | None = None,
+                   user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    rows = export_kpi_rows(db, bg=bg or None, period=period or None, year=year or None,
+                           lang=get_lang(request))
+    name = "bonus_kpi_detail" + (f"_{year}" if year else "") + (f"_{bg}" if bg else "") \
            + (f"_{period}" if period else "") + ".csv"
     return _csv_response(rows, name)
 

@@ -16,8 +16,12 @@
         {% for b in bgs %}<option value="{{ b }}">{{ tl(b) }}</option>{% endfor %}
       </select>
     </div>
-    <button class="btn" type="submit">{{ t('download_csv') }}</button>
+    <button class="btn" type="submit" formaction="/admin/export.csv">{{ t('download_summary_csv') }}</button>
+    <button class="btn secondary" type="submit" formaction="/admin/export_kpi.csv">{{ t('download_kpi_csv') }}</button>
   </form>
   <p class="muted">{{ t('export_note') }}</p>
+  <hr>
+  <p><strong>{{ t('export_summary_title') }}</strong><br><span class="muted">{{ t('export_summary_note') }}</span></p>
+  <p><strong>{{ t('export_kpi_title') }}</strong><br><span class="muted">{{ t('export_kpi_note') }}</span></p>
 </div>
 {% endblock %}

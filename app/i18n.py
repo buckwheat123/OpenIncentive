@@ -105,6 +105,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     # ---------- BG ----------
     "bonus_overview": ("奖金总览", "Bonus Overview"),
     "download_bg_history": ("下载 BG 完整历史 (CSV)", "Download full BG history (CSV)"),
+    "download_bg_kpi_history": ("下载 BG 各 KPI 明细 (CSV)", "Download BG per-KPI detail (CSV)"),
     "send_letter": ("发送奖金通知信", "Send bonus letter"),
     "letter_log": ("通知信记录", "Letter log"),
     "no_members": ("该 BG 暂无成员。", "This BG has no members yet."),
@@ -284,6 +285,16 @@ STRINGS: dict[str, tuple[str, str]] = {
     "all_years": ("全部年份", "All years"),
     "all_bgs": ("全部 BG", "All BGs"),
     "download_csv": ("下载 CSV", "Download CSV"),
+    "export_summary_title": ("表一 · 总支付率（每次计算每人每计划一行）",
+                             "Sheet 1 · Total rate (one row per person/plan per run)"),
+    "export_summary_note": ("反映每次计算的总支付率：加权支付率、权重合计、特殊调整、季度总支付率；权重合计不是 100% 时在 comment 列标注。不含未加权支付率。",
+                            "Total payout rate per run: weighted rate, weight total, adjustment, quarterly total; a comment is flagged when weights do not total 100%. No unweighted rate."),
+    "export_kpi_title": ("表二 · 各 KPI 明细（每次计算每人每个 KPI 一行）",
+                         "Sheet 2 · Per-KPI detail (one row per person/KPI per run)"),
+    "export_kpi_note": ("反映每次计算每个人各 KPI 的情况：目标、实绩、Curve、权重、达成率、支付率。",
+                        "Per-KPI breakdown of each run: target, actual, curve, weight, attainment, payout rate."),
+    "download_summary_csv": ("下载总支付率表", "Download total-rate sheet"),
+    "download_kpi_csv": ("下载各 KPI 明细表", "Download per-KPI detail sheet"),
 
     # ---------- labels / language ----------
     "labels_title": ("语言管理：数据库字段值翻译（默认取数据库原始值）",

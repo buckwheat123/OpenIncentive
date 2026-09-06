@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 
-from ..csvio import export_results_rows, to_csv
+from ..csvio import export_kpi_rows, export_results_rows, to_csv
 from ..deps import get_db, require_roles, require_user
 from ..i18n import Translator, get_lang
 from ..models import BonusPlan, BonusResult, CalcRun, User
@@ -276,6 +276,18 @@ def bg_export(request: Request, period: str | None = None, user: User = Depends(
               db=Depends(get_db)):
     rows = export_results_rows(db, bg=user.bg, period=period, lang=get_lang(request))
     name = f"bonus_history_{user.bg}" + (f"_{period}" if period else "") + ".csv"
+    return Response(
+        "\ufeff" + to_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.get("/bg/export_kpi.csv")
+def bg_export_kpi(request: Request, period: str | None = None,
+                  user: User = Depends(require_roles("BG_ADMIN", "ADMIN")), db=Depends(get_db)):
+    rows = export_kpi_rows(db, bg=user.bg, period=period, lang=get_lang(request))
+    name = f"bonus_kpi_history_{user.bg}" + (f"_{period}" if period else "") + ".csv"
     return Response(
         "\ufeff" + to_csv(rows),
         media_type="text/csv; charset=utf-8",

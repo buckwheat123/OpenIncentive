@@ -13,6 +13,7 @@ Conventions
 
 import csv
 import io
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -785,6 +786,52 @@ def export_results_rows(db: Session, bg: str | None = None, period: str | None =
                          f"{r.adjustment_pct:.2f}", f"{r.final_rate_pct:.2f}",
                          "Y" if r.adjusted else "", comment,
                          run.created_at.strftime("%Y-%m-%d %H:%M")])
+    return rows
+
+
+def export_kpi_rows(db: Session, bg: str | None = None, period: str | None = None,
+                    year: str | None = None, lang: str = DEFAULT_LANG) -> list[list]:
+    """Per-KPI detail of the latest run per period: one row per employee/plan/KPI.
+
+    Companion to export_results_rows (which gives one total-rate row per plan).
+    Exploded from BonusResult.detail_json captured at calculation time. Filterable
+    by BG, exact period or year.
+    """
+    from .models import BonusResult, CalcRun
+
+    periods = db.scalars(select(CalcRun.period).distinct()).all()
+    if period:
+        periods = [p for p in periods if p == period]
+    if year:
+        periods = [p for p in periods if p.split("-")[0] == year]
+    header = ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
+              "kpi_name", "target", "actual", "curve_name", "weight_pct",
+              "attainment_pct", "rate_pct", "calculated_at"]
+    rows = [header]
+    for p in sorted(periods):
+        run = db.scalars(
+            select(CalcRun).where(CalcRun.period == p).order_by(CalcRun.created_at.desc(), CalcRun.id.desc())
+        ).first()
+        if not run:
+            continue
+        for r in db.scalars(select(BonusResult).where(BonusResult.run_id == run.id)).all():
+            emp = r.employee
+            if bg and emp.bg != bg:
+                continue
+            calculated_at = run.created_at.strftime("%Y-%m-%d %H:%M")
+            try:
+                detail = json.loads(r.detail_json) if r.detail_json else []
+            except (ValueError, TypeError):
+                detail = []
+            for d in detail:
+                actual = d.get("actual")
+                rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
+                             emp.job_title or "", r.plan_name,
+                             d.get("kpi", ""), fmt_num(d.get("quota")),
+                             "" if actual is None else fmt_num(actual),
+                             d.get("curve", ""), fmt_num(d.get("weight_pct")),
+                             fmt_num(d.get("attainment_pct")), fmt_num(d.get("rate_pct")),
+                             calculated_at])
     return rows
 
 

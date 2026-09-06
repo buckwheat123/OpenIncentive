@@ -167,16 +167,26 @@ def main():
         assert "1150000" in del_tpl and "E001" in del_tpl
         print("[11] period-filtered calc/adjust/delete templates OK")
 
-        # ---- export page + year/BG filtered export ----
+        # ---- export page + year/BG filtered export (two sheets) ----
         export_page = c.get(f"{BASE}/admin/export").text
         assert "导出全部结果" in export_page and "全部年份" in export_page and "全部 BG" in export_page
+        assert "总支付率" in export_page and "各 KPI 明细" in export_page   # two-sheet UI
+        # sheet 1: total rate per person/plan
         r = c.get(f"{BASE}/admin/export.csv?year=2026&bg=Retail")
         assert r.status_code == 200 and "plan_name" in r.text and "weighted_rate_pct" in r.text
         assert "bonus_amount" not in r.text
         assert "comment" in r.text and "weight_total_pct" in r.text   # weighted-only + comment column
         assert "unweighted_rate_pct" not in r.text                    # unweighted rate removed
+        assert "kpi_name" not in r.text                               # sheet 1 is NOT per-KPI
         assert "E001" in r.text and "E004" not in r.text    # Commercial excluded by BG filter
-        print("[12] export page + year/BG filtered export OK")
+        # sheet 2: per-KPI detail
+        rk = c.get(f"{BASE}/admin/export_kpi.csv?year=2026&bg=Retail")
+        assert rk.status_code == 200
+        assert "kpi_name" in rk.text and "attainment_pct" in rk.text and "rate_pct" in rk.text
+        assert "curve_name" in rk.text and "weight_pct" in rk.text
+        assert "weighted_rate_pct" not in rk.text.splitlines()[0]     # no total-rate columns in header
+        assert "E001" in rk.text and "E004" not in rk.text            # same BG filter
+        print("[12] export page + two-sheet (total rate + per-KPI) export OK")
 
         # ---- letter-data import screen (separate, no actual column) ----
         data_page = c.get(f"{BASE}/letters/data").text
@@ -206,6 +216,8 @@ def main():
         assert "奖金总览" in bg_page and "E001" in bg_page and "季度总支付率" in bg_page
         r = c.get(f"{BASE}/bg/export.csv")
         assert "E001" in r.text and "E004" not in r.text
+        rk = c.get(f"{BASE}/bg/export_kpi.csv")
+        assert "kpi_name" in rk.text and "E001" in rk.text and "E004" not in rk.text
         print("[14] BG admin scope (template filter + out-of-BG rejection + BG view) OK")
 
         # ---- platform admin proxies a BG admin ----
