@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ t('preview_result') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>{{ t('preview_result') }}</h3>
+  <p class="summary-counts">{{ t('summary_counts', ok=summary.ok, ig=summary.ignored, er=summary.errors) }}</p>
+  <p class="muted">{{ t('preview_note') }}</p>
+  <table>
+    <tr>
+      <th>{{ t('period') }}</th><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th>
+      <th>{{ t('plan') }}</th><th>{{ t('kpi_col') }}</th><th>{{ t('weight_col') }}</th>
+      <th>{{ t('target') }}</th><th>{{ t('curve_col') }}</th>
+      {% if with_actual %}<th>{{ t('actual_col') }}</th>{% endif %}
+      <th>{{ t('status') }}</th><th>{{ t('note') }}</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.period }}</td>
+      <td>{{ r.emp_ext }}</td>
+      <td>{{ r.employee.name if r.employee else '' }}</td>
+      <td>{{ r.plan_name }}</td>
+      <td>{{ r.kpi_name }}</td>
+      <td>{{ r.weight | g if r.weight is not none else '' }}</td>
+      <td>{{ r.quota | g if r.quota is not none else '' }}</td>
+      <td>{{ r.curve_name }}</td>
+      {% if with_actual %}<td>{{ r.actual | g if r.actual is not none else '' }}</td>{% endif %}
+      <td>{% if r.ok %}<span class="tag ok">{{ r.status }}</span>{% elif r.ignored %}<span class="tag">{{ r.status }}</span>{% else %}<span class="tag warn">{{ r.status }}</span>{% endif %}</td>
+      <td>{{ r.note }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <div class="inline">
+    <form method="post" action="{{ execute_url }}"
+          onsubmit="return confirm('{{ t('confirm_import_exec') }}')">
+      <input type="hidden" name="csv_text" value="{{ csv_text }}">
+      <button class="btn" type="submit">{{ t('confirm_execute') }}</button>
+    </form>
+    {% if summary.errors %}
+    <form method="post" action="{{ errors_url }}">
+      <input type="hidden" name="csv_text" value="{{ csv_text }}">
+      <button class="btn" type="submit">{{ t('download_errors') }}</button>
+    </form>
+    {% endif %}
+    <a class="btn" href="{{ back_url }}">{{ t('back') }}</a>
+  </div>
+</div>
+{% endblock %}

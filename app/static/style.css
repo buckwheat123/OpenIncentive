@@ -51,3 +51,7 @@ textarea { width: 100%; min-height: 160px; font-family: Consolas, monospace; }
   color: var(--ink); cursor: pointer; border-bottom: 1px solid #f1f5f9; user-select: none; }
 .pick-list label:hover { background: #f1f5f9; }
 .pick-list label.hidden { display: none; }
+.proxy-banner { background: #fef3c7; border-bottom: 1px solid #fcd34d; color: #92400e;
+  padding: 8px 20px; font-size: 14px; display: flex; gap: 12px; align-items: center; }
+.proxy-banner .btn { margin-left: auto; }
+.summary-counts { font-weight: 600; }

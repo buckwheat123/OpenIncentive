@@ -32,9 +32,14 @@
       <td>{{ u.updated_at|fmt }}</td>
       <td>{% if u.is_active %}<span class="tag ok">{{ t('active') }}</span>{% else %}<span class="tag">{{ t('inactive') }}</span>{% endif %}</td>
       <td>{% if u.id != user.id %}
-        <form method="post" action="/admin/users/{{ u.id }}/toggle" style="margin:0">
+        <form method="post" action="/admin/users/{{ u.id }}/toggle" style="margin:0;display:inline">
           <button class="btn small secondary" type="submit">{% if u.is_active %}{{ t('disable') }}{% else %}{{ t('enable') }}{% endif %}</button>
-        </form>{% endif %}</td>
+        </form>
+        {% if u.role == 'BG_ADMIN' and u.is_active %}
+        <form method="post" action="/admin/proxy/{{ u.id }}" style="margin:0;display:inline"
+              onsubmit="return confirm('{{ t('proxy_confirm') }}')">
+          <button class="btn small" type="submit">{{ t('proxy') }}</button>
+        </form>{% endif %}{% endif %}</td>
     </tr>
     {% endfor %}
   </table>

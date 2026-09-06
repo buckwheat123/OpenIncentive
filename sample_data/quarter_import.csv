@@ -1,0 +1,8 @@
+period,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,quota,curve_name,actual
+2027-Q1,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,1200000,Standard Curve,1150000
+2027-Q1,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve,92
+2027-Q1,E002,李娜,,,,,,,Sales Incentive,Revenue,60,1100000,Standard Curve,980000
+2027-Q1,E002,李娜,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve,88
+2027-Q1,E999,王五,,,,,,,Sales Incentive,Revenue,60,1000000,Standard Curve,900000
+2027-Q1,E002,李娜,,,,,,,Sales Incentive,Revenue,60,1100000,Standard Curve,990000
+2027-Q1,E001,张伟,,,,,,,Sales Incentive,NewKpi,,100,CurveX,50

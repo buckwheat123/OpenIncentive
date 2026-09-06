@@ -8,10 +8,13 @@ import json
 import os
 import secrets
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import select
 
-from ..deps import current_user, get_db, require_user
+from ..csvio import (big_error_rows, big_summary, big_template_rows, decode_csv, execute_big_import,
+                     parse_big_rows, recent_periods, to_csv)
+from ..deps import current_user, get_db, require_user, session_payload
 from ..i18n import Translator, get_lang
 from ..mailer import send_mail
 from ..models import Letter, LetterTemplate, User
@@ -124,6 +127,78 @@ def letters_log(request: Request, user: User = Depends(require_user), db=Depends
     else:
         letters = db.scalars(stmt).all()
     return render(request, "letters/log.html", user=user, letters=letters)
+
+
+# ---------- letter data import (same sheet as the calculation import, minus actual) ----------
+
+def _csv_response(rows: list[list], filename: str) -> Response:
+    return Response(
+        "\ufeff" + to_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/letters/data")
+def letter_data_page(request: Request, user: User = Depends(require_user), db=Depends(get_db)):
+    if not _allowed(user):
+        return flash("/", Translator(get_lang(request)).t("no_permission"))
+    return render(request, "letters/data.html", user=user, periods=recent_periods(db))
+
+
+@router.get("/letters/data/template.csv")
+def letter_data_template(request: Request, period: str = "",
+                         user: User = Depends(require_user), db=Depends(get_db)):
+    if not _allowed(user):
+        return flash("/", Translator(get_lang(request)).t("no_permission"))
+    rows = big_template_rows(db, period=period.strip() or None, bg=_scope_bg(user),
+                             with_actual=False)
+    name = f"letter_data_template{'_' + period.strip() if period.strip() else ''}.csv"
+    return _csv_response(rows, name)
+
+
+@router.post("/letters/data/preview")
+async def letter_data_preview(request: Request, file: UploadFile | None = None,
+                              user: User = Depends(require_user), db=Depends(get_db)):
+    t = Translator(get_lang(request))
+    if not _allowed(user):
+        return flash("/", t.t("no_permission"))
+    if file is None or not file.filename:
+        return flash("/letters/data", t.t("msg_no_file"))
+    text = decode_csv(await file.read())
+    entries = parse_big_rows(db, text, user, get_lang(request), with_actual=False)
+    if not entries:
+        return flash("/letters/data", t.t("msg_no_rows"))
+    return render(request, "import_preview.html", user=user, rows=entries, csv_text=text,
+                  summary=big_summary(entries), with_actual=False,
+                  execute_url="/letters/data/execute", errors_url="/letters/data/errors.csv",
+                  back_url="/letters/data")
+
+
+@router.post("/letters/data/execute")
+def letter_data_execute(request: Request, csv_text: str = Form(...),
+                        user: User = Depends(require_user), db=Depends(get_db)):
+    t = Translator(get_lang(request))
+    if not _allowed(user):
+        return flash("/", t.t("no_permission"))
+    payload = session_payload(request) or {}
+    proxy_note = ""
+    if payload.get("p"):
+        original = db.get(User, payload["p"])
+        if original:
+            proxy_note = f"proxy by {original.employee_id}"
+    msg = execute_big_import(db, csv_text, user, get_lang(request), with_actual=False,
+                             proxy_note=proxy_note)
+    return flash("/letters/data", msg)
+
+
+@router.post("/letters/data/errors.csv")
+def letter_data_errors(request: Request, csv_text: str = Form(...),
+                       user: User = Depends(require_user), db=Depends(get_db)):
+    if not _allowed(user):
+        return flash("/", Translator(get_lang(request)).t("no_permission"))
+    rows = big_error_rows(db, csv_text, user, get_lang(request), with_actual=False)
+    return _csv_response(rows, "letter_data_errors.csv")
 
 
 # ---------- templates ----------

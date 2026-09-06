@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import or_, select
 
-from ..deps import SESSION_COOKIE, SESSION_MAX_AGE, current_user, get_db, home_for, make_session
-from ..i18n import DEFAULT_LANG, LANGS, LANG_COOKIE
-from ..models import User
+from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, current_user, get_db, home_for,
+                    make_session, session_payload)
+from ..i18n import DEFAULT_LANG, LANGS, LANG_COOKIE, Translator
+from ..models import DataOpLog, User
 from ..security import verify_password
 from ..ui import render
 
@@ -20,6 +21,27 @@ def set_lang(code: str, request: Request):
     referer = request.headers.get("referer") or "/"
     response = RedirectResponse(referer, status_code=303)
     response.set_cookie(LANG_COOKIE, lang, max_age=365 * 24 * 3600, samesite="lax")
+    return response
+
+
+@router.get("/proxy/stop")
+def proxy_stop(request: Request, db=Depends(get_db)):
+    """End a proxy session and restore the original platform admin identity."""
+    payload = session_payload(request)
+    original = db.get(User, payload["p"]) if payload and payload.get("p") else None
+    if not original or not original.is_active or original.role != "ADMIN":
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(SESSION_COOKIE)
+        return response
+    db.add(DataOpLog(op_type="PROXY", entity="session",
+                     entity_ref=f"{original.employee_id} ← stop",
+                     reason="stop proxy", created_by=original.id))
+    db.commit()
+    t = Translator(DEFAULT_LANG if not request.cookies.get(LANG_COOKIE)
+                   else request.cookies.get(LANG_COOKIE))
+    response = RedirectResponse(f"/admin?msg={quote(t.t('msg_proxy_stopped'))}", status_code=303)
+    response.set_cookie(SESSION_COOKIE, make_session(original.id), max_age=SESSION_MAX_AGE,
+                        httponly=True, samesite="lax")
     return response
 
 

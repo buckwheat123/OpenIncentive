@@ -22,8 +22,27 @@ if not _key_file.exists():
 _serializer = URLSafeTimedSerializer(_key_file.read_text(encoding="utf-8"))
 
 
-def make_session(user_id: int) -> str:
-    return _serializer.dumps(user_id)
+def make_session(user_id: int, proxy_of: int | None = None) -> str:
+    payload: dict = {"u": user_id}
+    if proxy_of:
+        payload["p"] = proxy_of
+    return _serializer.dumps(payload)
+
+
+def session_payload(request: Request) -> dict | None:
+    """Parse the session cookie. Returns {"u": user_id, "p"?: original admin id}."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    try:
+        data = _serializer.loads(token, max_age=SESSION_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+    if isinstance(data, int):  # legacy payload: bare user id
+        return {"u": data}
+    if isinstance(data, dict) and isinstance(data.get("u"), int):
+        return data
+    return None
 
 
 def get_db():
@@ -35,14 +54,10 @@ def get_db():
 
 
 def current_user(request: Request, db: Session = Depends(get_db)) -> User | None:
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
+    payload = session_payload(request)
+    if payload is None:
         return None
-    try:
-        user_id = _serializer.loads(token, max_age=SESSION_MAX_AGE)
-    except (BadSignature, SignatureExpired):
-        return None
-    user = db.get(User, user_id)
+    user = db.get(User, payload["u"])
     return user if user and user.is_active else None
 
 

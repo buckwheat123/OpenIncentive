@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 from .calc import is_locked
 from .i18n import DEFAULT_LANG, Translator, invalidate_label_cache
 from .models import Actual, BonusPlan, Curve, DataOpLog, Label, PlanKpi, User
-from .security import hash_password
 
 
 def utcnow() -> datetime:
@@ -59,161 +58,311 @@ def resolve_employee(db: Session, employee_id: str, name: str) -> User | None:
     return None
 
 
-# ---------------------------------------------------------------- employees
+# ---------------------------------------------------------------- unified quarterly big-table import
+#
+# One sheet carries EVERYTHING needed for a quarter's YTD calculation:
+#   period,employee_id,name,email,bg,department,job_title,manager_id,role,
+#   plan_name,kpi_name,weight_pct,quota,curve_name[,actual]
+# The letter-data sheet uses the same columns minus `actual`.
+#
+# Validation per row: user exists / curve exists / duplicate person+KPI in sheet /
+# missing required fields / sealed quarter / (BG admins) out-of-BG rows.
+# Rows whose data is fully identical to the current system data are IGNORED (not errors).
 
-def import_employees(db: Session, text: str, lang: str = DEFAULT_LANG) -> str:
-    """Columns: employee_id,name,email,bg,department,job_title,manager_id,role,password(optional)"""
-    t = Translator(lang)
-    created = updated = 0
-    pending_manager: list[tuple[User, str]] = []
-    for row in _rows(text):
-        if not (row.get("employee_id") or row.get("name")):
+def big_header(with_actual: bool = True) -> list[str]:
+    cols = ["period", "employee_id", "name", "email", "bg", "department", "job_title",
+            "manager_id", "role", "plan_name", "kpi_name", "weight_pct", "quota", "curve_name"]
+    if with_actual:
+        cols.append("actual")
+    return cols
+
+
+BIG_HEADER = big_header(True)
+LETTER_DATA_HEADER = big_header(False)
+
+
+def recent_periods(db: Session, n: int = 3) -> list[str]:
+    """The most recent n distinct periods known to the system (template prefill choices)."""
+    periods = set(db.scalars(select(BonusPlan.period).distinct()).all())
+    periods |= set(db.scalars(select(Actual.period).distinct()).all())
+    return sorted(periods, reverse=True)[:n]
+
+
+def big_template_rows(db: Session, period: str | None = None, bg: str | None = None,
+                      with_actual: bool = True) -> list[list]:
+    """Import template. No period → header only (blank template). With period →
+    prefilled from that quarter's current data, scoped to bg (permission filter)."""
+    header = big_header(with_actual)
+    rows = [header]
+    if not period:
+        return rows
+    plans = db.scalars(
+        select(BonusPlan).where(BonusPlan.period == period,
+                                BonusPlan.is_current == True,  # noqa: E712
+                                BonusPlan.is_deleted == False)  # noqa: E712
+        .order_by(BonusPlan.employee_id, BonusPlan.plan_name)
+    ).all()
+    for p in plans:
+        emp = db.get(User, p.employee_id)
+        if bg and emp.bg != bg:
             continue
-        user = resolve_employee(db, row.get("employee_id"), row.get("name"))
-        if user is None:
-            if not row.get("employee_id"):
-                continue  # cannot create a user without a 工号
-            user = User(employee_id=row["employee_id"],
-                        password_hash=hash_password(row.get("password") or row["employee_id"]))
-            db.add(user)
-            created += 1
-        else:
-            if row.get("password"):
-                user.password_hash = hash_password(row["password"])
-            updated += 1
-        user.name = row.get("name") or user.name or row.get("employee_id")
-        if row.get("email"):
-            user.email = row["email"]
-        if row.get("bg"):
-            user.bg = row["bg"]
-        if row.get("department"):
-            user.department = row["department"]
-        if row.get("job_title"):
-            user.job_title = row["job_title"]
-        if row.get("role"):
-            user.role = row["role"].upper()
-        if row.get("manager_id"):
-            pending_manager.append((user, row["manager_id"]))
-        user.updated_at = utcnow()
-    db.flush()
-    linked = 0
-    for user, manager_ext in pending_manager:
-        manager = resolve_employee(db, manager_ext, None)
-        if manager:
-            user.manager_id = manager.id
-            linked += 1
-    db.commit()
-    return t.t("msg_emp_import", c=created, u=updated, l=linked)
+        mgr = db.get(User, emp.manager_id) if emp.manager_id else None
+        for kpi in p.kpis:
+            actual = ""
+            if with_actual:
+                a = db.scalars(
+                    select(Actual).where(Actual.period == period, Actual.employee_id == emp.id,
+                                         Actual.kpi_name == kpi.kpi_name,
+                                         Actual.is_current == True,  # noqa: E712
+                                         Actual.is_deleted == False)  # noqa: E712
+                ).first()
+                actual = fmt_num(a.actual) if a else ""
+            rows.append([period, emp.employee_id, emp.name, emp.email or "", emp.bg or "",
+                         emp.department or "", emp.job_title or "",
+                         mgr.employee_id if mgr else "", emp.role or "",
+                         p.plan_name, kpi.kpi_name, fmt_num(kpi.weight_pct), fmt_num(kpi.quota),
+                         kpi.curve.name, actual])
+    return rows
 
 
-# ---------------------------------------------------------------- plans (versioned)
+def _num(value) -> float | None:
+    try:
+        return float(str(value).strip().replace(",", ""))
+    except (TypeError, ValueError):
+        return None
 
-def import_plans(db: Session, text: str, lang: str = DEFAULT_LANG) -> str:
-    """Columns: period,employee_id,name,plan_name,kpi_name,weight_pct,quota,curve_name
-    同一 (期间,员工, plan_name) 的多个 KPI 行构成一个计划；重复导入生成新版本。"""
+
+def fmt_num(value) -> str:
+    """Human/CSV-friendly number: no scientific notation, whole numbers as ints,
+    otherwise up to 4 decimals with trailing zeros trimmed."""
+    if value is None or value == "":
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f.is_integer():
+        return str(int(f))
+    return f"{f:.4f}".rstrip("0").rstrip(".")
+
+
+def _user_info_changes(db: Session, employee: User, raw: dict, actor: User) -> dict:
+    """Employee-info fields provided in the row that differ from the current record."""
+    changes: dict = {}
+    for field in ("name", "email", "bg", "department", "job_title"):
+        v = (raw.get(field) or "").strip()
+        if v and v != (getattr(employee, field) or ""):
+            changes[field] = v
+    role = (raw.get("role") or "").strip().upper()
+    if role and actor.role == "ADMIN" and role != employee.role:
+        changes["role"] = role
+    mgr_ext = (raw.get("manager_id") or "").strip()
+    if mgr_ext:
+        mgr = resolve_employee(db, mgr_ext, "")
+        if mgr and mgr.id != employee.manager_id:
+            changes["manager"] = mgr.id
+    return changes
+
+
+def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
+                   with_actual: bool = True) -> list[dict]:
+    """Pass-1 validation of the unified sheet. Each entry carries ok/ignored flags
+    and a translated status for the preview table."""
     t = Translator(lang)
-    groups: dict[tuple, dict] = {}
-    order: list[tuple] = []
-    errors: list[str] = []
-    for row in _rows(text):
-        period = row.get("period")
-        kpi_name = row.get("kpi_name")
-        if not (period and kpi_name):
+    entries: list[dict] = []
+    seen: set[tuple] = set()
+    for raw in _rows(text):
+        if not any((raw.get(c) or "").strip() for c in ("period", "employee_id", "name", "kpi_name")):
             continue
-        employee = resolve_employee(db, row.get("employee_id"), row.get("name"))
+        period = (raw.get("period") or "").strip()
+        plan_name = (raw.get("plan_name") or "").strip()
+        kpi_name = (raw.get("kpi_name") or "").strip()
+        curve_name = (raw.get("curve_name") or "").strip()
+        employee = resolve_employee(db, raw.get("employee_id", ""), raw.get("name", ""))
+        entry = {
+            "raw": raw, "period": period, "employee": employee,
+            "emp_ext": (raw.get("employee_id") or raw.get("name") or "?").strip(),
+            "plan_name": plan_name, "kpi_name": kpi_name, "curve_name": curve_name,
+            "weight": _num(raw.get("weight_pct")), "quota": _num(raw.get("quota")),
+            "actual": _num(raw.get("actual")) if with_actual else None,
+            "curve_id": None, "status": "", "note": "", "ok": False, "ignored": False,
+        }
+        entries.append(entry)
+        if not period:
+            entry["status"] = t.t("row_no_period"); continue
         if employee is None:
-            errors.append(f"{period}/{row.get('employee_id') or row.get('name')}: {t.t('row_no_employee')}")
-            continue
-        curve = db.scalars(select(Curve).where(Curve.name == row.get("curve_name"))).first()
-        if curve is None:
-            errors.append(f"{period}/{kpi_name}: {t.t('err_curve_missing', name=row.get('curve_name'))}")
-            continue
-        plan_name = (row.get("plan_name") or "DEFAULT").strip()
-        key = (period, employee.id, plan_name)
-        if key not in groups:
-            groups[key] = {"kpis": []}
-            order.append(key)
-        groups[key]["kpis"].append(
-            {"kpi_name": kpi_name, "weight_pct": float(row["weight_pct"]),
-             "quota": float(row["quota"]), "curve_id": curve.id}
-        )
-
-    added = skipped = 0
-    for key in order:
-        period, emp_id, plan_name = key
-        employee = db.get(User, emp_id)
+            entry["status"] = t.t("row_no_employee"); continue
+        if actor.role == "BG_ADMIN" and employee.bg != actor.bg:
+            entry["status"] = t.t("row_out_of_bg"); continue
         if is_locked(db, period, employee.bg):
-            skipped += len(groups[key]["kpis"])
+            entry["status"] = t.t("row_sealed"); entry["note"] = f"{period}/{employee.bg}"; continue
+        key = (period, employee.id, plan_name, kpi_name)
+        if key in seen:
+            entry["status"] = t.t("row_dup"); continue
+        seen.add(key)
+        missing = [f for f, v in (("plan_name", plan_name), ("kpi_name", kpi_name),
+                                  ("curve_name", curve_name),
+                                  ("weight_pct", (raw.get("weight_pct") or "").strip()),
+                                  ("quota", (raw.get("quota") or "").strip())) if not v]
+        if with_actual and not (raw.get("actual") or "").strip():
+            missing.append("actual")
+        if missing:
+            entry["status"] = t.t("row_missing_fields", f=", ".join(missing)); continue
+        bad = [f for f, v in (("weight_pct", entry["weight"]), ("quota", entry["quota"])) if v is None]
+        if with_actual and entry["actual"] is None:
+            bad.append("actual")
+        if bad:
+            entry["status"] = t.t("row_bad_number", f=", ".join(bad)); continue
+        if entry["quota"] <= 0:
+            entry["status"] = t.t("row_bad_number", f="quota"); continue
+        curve = db.scalars(select(Curve).where(Curve.name == curve_name)).first()
+        if curve is None:
+            entry["status"] = t.t("row_no_curve", name=curve_name); continue
+        entry["curve_id"] = curve.id
+        entry["status"] = t.t("row_importable")
+        entry["ok"] = True
+    _mark_identical_groups(db, entries, actor, t, with_actual)
+    return entries
+
+
+def _current_actual(db: Session, period: str, emp_id: int, kpi_name: str) -> Actual | None:
+    return db.scalars(
+        select(Actual).where(Actual.period == period, Actual.employee_id == emp_id,
+                             Actual.kpi_name == kpi_name,
+                             Actual.is_current == True,  # noqa: E712
+                             Actual.is_deleted == False)  # noqa: E712
+    ).first()
+
+
+def _mark_identical_groups(db: Session, entries: list[dict], actor: User,
+                           t: Translator, with_actual: bool) -> None:
+    """A plan group whose sheet data fully matches the system (KPI set, weights,
+    quotas, curves, actuals, employee info) is ignored — not an error, no new version."""
+    groups: dict[tuple, list[dict]] = {}
+    for e in entries:
+        if e["ok"]:
+            groups.setdefault((e["period"], e["employee"].id, e["plan_name"]), []).append(e)
+    for (period, emp_id, plan_name), rows in groups.items():
+        plan = db.scalars(
+            select(BonusPlan).where(BonusPlan.period == period, BonusPlan.employee_id == emp_id,
+                                    BonusPlan.plan_name == plan_name,
+                                    BonusPlan.is_current == True,  # noqa: E712
+                                    BonusPlan.is_deleted == False)  # noqa: E712
+        ).first()
+        if plan is None:
+            continue  # new plan → importable
+        current = {k.kpi_name: (round(k.weight_pct, 6), round(k.quota, 6), k.curve_id)
+                   for k in plan.kpis}
+        sheet = {e["kpi_name"]: (round(e["weight"], 6), round(e["quota"], 6), e["curve_id"])
+                 for e in rows}
+        if current != sheet:
             continue
-        # deactivate previous current version
-        old = db.scalars(
-            select(BonusPlan).where(
-                BonusPlan.period == period, BonusPlan.employee_id == emp_id,
-                BonusPlan.plan_name == plan_name, BonusPlan.is_current == True,  # noqa: E712
-            )
-        ).all()
-        all_versions = db.scalars(
-            select(BonusPlan.version).where(
-                BonusPlan.period == period, BonusPlan.employee_id == emp_id,
-                BonusPlan.plan_name == plan_name,
-            )
-        ).all()
-        max_version = max(all_versions, default=0)
+        identical = True
+        if with_actual:
+            for e in rows:
+                a = _current_actual(db, period, emp_id, e["kpi_name"])
+                if a is None or abs(a.actual - e["actual"]) > 1e-9:
+                    identical = False
+                    break
+        employee = db.get(User, emp_id)
+        if identical and not _user_info_changes(db, employee, rows[0]["raw"], actor):
+            for e in rows:
+                e.update(ok=False, ignored=True, status=t.t("row_identical"))
+
+
+def big_summary(entries: list[dict]) -> dict:
+    return {"ok": sum(1 for e in entries if e["ok"]),
+            "ignored": sum(1 for e in entries if e["ignored"]),
+            "errors": sum(1 for e in entries if not e["ok"] and not e["ignored"])}
+
+
+def execute_big_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
+                       with_actual: bool = True, proxy_note: str = "") -> str:
+    """Pass-2: re-parse and import the valid rows. Identical rows are ignored,
+    invalid rows are skipped (they were reported in the preview)."""
+    t = Translator(lang)
+    entries = parse_big_rows(db, text, actor, lang, with_actual)
+    summary = big_summary(entries)
+    groups: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for e in entries:
+        if not e["ok"]:
+            continue
+        key = (e["period"], e["employee"].id, e["plan_name"])
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(e)
+    plans = kpis = actuals = users = 0
+    for period, emp_id, plan_name in order:
+        rows = groups[(period, emp_id, plan_name)]
+        employee = db.get(User, emp_id)
+        changes = _user_info_changes(db, employee, rows[0]["raw"], actor)
+        if changes:
+            for field, value in changes.items():
+                if field == "manager":
+                    employee.manager_id = value
+                else:
+                    setattr(employee, field, value)
+            employee.updated_at = utcnow()
+            users += 1
+        # the sheet fully defines the plan's KPI set → new version replaces it
+        old = db.scalars(select(BonusPlan).where(
+            BonusPlan.period == period, BonusPlan.employee_id == emp_id,
+            BonusPlan.plan_name == plan_name,
+            BonusPlan.is_current == True)).all()  # noqa: E712
+        max_version = max(db.scalars(select(BonusPlan.version).where(
+            BonusPlan.period == period, BonusPlan.employee_id == emp_id,
+            BonusPlan.plan_name == plan_name)).all(), default=0)
         for o in old:
             o.is_current = False
         plan = BonusPlan(period=period, employee_id=emp_id, plan_name=plan_name,
                          version=max_version + 1, is_current=True, imported_at=utcnow())
         db.add(plan)
         db.flush()
-        for k in groups[key]["kpis"]:
-            db.add(PlanKpi(plan_id=plan.id, **k))
-        added += len(groups[key]["kpis"])
+        for e in rows:
+            db.add(PlanKpi(plan_id=plan.id, kpi_name=e["kpi_name"], weight_pct=e["weight"],
+                           quota=e["quota"], curve_id=e["curve_id"]))
+        plans += 1
+        kpis += len(rows)
+        db.add(DataOpLog(op_type="IMPORT", entity="plan",
+                         entity_ref=f"{period}/{employee.employee_id}/{plan_name} v{plan.version}",
+                         reason="quarter sheet import" + (f" ({proxy_note})" if proxy_note else ""),
+                         created_by=actor.id))
+        if with_actual:
+            for e in rows:
+                versions = db.scalars(select(Actual).where(
+                    Actual.period == period, Actual.employee_id == emp_id,
+                    Actual.kpi_name == e["kpi_name"])).all()
+                current = next((v for v in versions if v.is_current and not v.is_deleted), None)
+                if current is not None and abs(current.actual - e["actual"]) <= 1e-9:
+                    continue
+                for v in versions:
+                    v.is_current = False
+                db.add(Actual(period=period, employee_id=emp_id, kpi_name=e["kpi_name"],
+                              actual=e["actual"],
+                              version=max((v.version for v in versions), default=0) + 1,
+                              is_current=True, imported_at=utcnow()))
+                actuals += 1
     db.commit()
-    msg = t.t("msg_plans_imported", n=added)
-    if skipped:
-        msg += t.t("msg_sealed_skipped", n=skipped)
-    if errors:
-        msg += t.t("msg_errors", e="; ".join(errors[:5]))
-    return msg
+    return t.t("msg_big_import", p=plans, k=kpis, a=actuals, u=users,
+               i=summary["ignored"], e=summary["errors"])
 
 
-# ---------------------------------------------------------------- actuals (versioned)
-
-def import_actuals(db: Session, text: str, lang: str = DEFAULT_LANG) -> str:
-    """Columns: period,employee_id,name,kpi_name,actual (实绩为 YTD 累计值)。"""
-    t = Translator(lang)
-    added = skipped = 0
-    errors: list[str] = []
-    for row in _rows(text):
-        period, kpi_name = row.get("period"), row.get("kpi_name")
-        if not (period and kpi_name and row.get("actual")):
+def big_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
+                   with_actual: bool = True) -> list[list]:
+    """Error list CSV: the offending rows plus status/note columns, so the user can
+    fix them and re-upload."""
+    entries = parse_big_rows(db, text, actor, lang, with_actual)
+    header = big_header(with_actual) + ["status", "note"]
+    rows = [header]
+    for e in entries:
+        if e["ok"] or e["ignored"]:
             continue
-        employee = resolve_employee(db, row.get("employee_id"), row.get("name"))
-        if employee is None:
-            errors.append(f"{period}/{row.get('employee_id') or row.get('name')}: {t.t('row_no_employee')}")
-            continue
-        if is_locked(db, period, employee.bg):
-            skipped += 1
-            continue
-        versions = db.scalars(
-            select(Actual).where(
-                Actual.period == period, Actual.employee_id == employee.id, Actual.kpi_name == kpi_name
-            )
-        ).all()
-        for v in versions:
-            v.is_current = False
-        max_version = max((v.version for v in versions), default=0)
-        db.add(Actual(period=period, employee_id=employee.id, kpi_name=kpi_name,
-                      actual=float(row["actual"]), version=max_version + 1,
-                      is_current=True, imported_at=utcnow()))
-        added += 1
-    db.commit()
-    msg = t.t("msg_actuals_imported", n=added)
-    if skipped:
-        msg += t.t("msg_sealed_skipped", n=skipped)
-    if errors:
-        msg += t.t("msg_errors", e="; ".join(errors[:5]))
-    return msg
+        raw = e["raw"]
+        rows.append([(raw.get(c) or "") for c in big_header(with_actual)]
+                    + [e["status"], e["note"]])
+    return rows
 
 
 # ---------------------------------------------------------------- soft delete via CSV
@@ -224,25 +373,25 @@ PLAN_DELETE_HEADER = ["period", "employee_id", "name", "plan_name", "version",
                       "imported_at", "action", "reason"]
 
 
-def actual_delete_template_rows(db: Session) -> list[list]:
+def actual_delete_template_rows(db: Session, period: str | None = None) -> list[list]:
     rows = [ACTUAL_DELETE_HEADER]
-    actuals = db.scalars(
-        select(Actual).where(Actual.is_current == True, Actual.is_deleted == False)  # noqa: E712
-        .order_by(Actual.period, Actual.employee_id)
-    ).all()
+    stmt = select(Actual).where(Actual.is_current == True, Actual.is_deleted == False)  # noqa: E712
+    if period:
+        stmt = stmt.where(Actual.period == period)
+    actuals = db.scalars(stmt.order_by(Actual.period, Actual.employee_id)).all()
     for a in actuals:
         emp = db.get(User, a.employee_id)
-        rows.append([a.period, emp.employee_id, emp.name, a.kpi_name, f"{a.actual:g}",
+        rows.append([a.period, emp.employee_id, emp.name, a.kpi_name, fmt_num(a.actual),
                      a.version, a.imported_at.strftime("%Y-%m-%d %H:%M"), "", ""])
     return rows
 
 
-def plan_delete_template_rows(db: Session) -> list[list]:
+def plan_delete_template_rows(db: Session, period: str | None = None) -> list[list]:
     rows = [PLAN_DELETE_HEADER]
-    plans = db.scalars(
-        select(BonusPlan).where(BonusPlan.is_current == True, BonusPlan.is_deleted == False)  # noqa: E712
-        .order_by(BonusPlan.period, BonusPlan.employee_id)
-    ).all()
+    stmt = select(BonusPlan).where(BonusPlan.is_current == True, BonusPlan.is_deleted == False)  # noqa: E712
+    if period:
+        stmt = stmt.where(BonusPlan.period == period)
+    plans = db.scalars(stmt.order_by(BonusPlan.period, BonusPlan.employee_id)).all()
     for p in plans:
         emp = db.get(User, p.employee_id)
         rows.append([p.period, emp.employee_id, emp.name, p.plan_name,
@@ -320,13 +469,13 @@ def deletion_logs(db: Session) -> list[DataOpLog]:
     ).all())
 
 
-def _csv_rows_for_calc_template(db: Session) -> list[list]:
+def _csv_rows_for_calc_template(db: Session, period: str | None = None) -> list[list]:
     """One row per current plan; admin fills action=计算 to trigger."""
     rows = [["period", "employee_id", "name", "plan_name", "action"]]
-    plans = db.scalars(
-        select(BonusPlan).where(BonusPlan.is_current == True, BonusPlan.is_deleted == False)  # noqa: E712
-        .order_by(BonusPlan.period, BonusPlan.employee_id)
-    ).all()
+    stmt = select(BonusPlan).where(BonusPlan.is_current == True, BonusPlan.is_deleted == False)  # noqa: E712
+    if period:
+        stmt = stmt.where(BonusPlan.period == period)
+    plans = db.scalars(stmt.order_by(BonusPlan.period, BonusPlan.employee_id)).all()
     for p in plans:
         emp = db.get(User, p.employee_id)
         rows.append([p.period, emp.employee_id, emp.name, p.plan_name, ""])
@@ -338,13 +487,13 @@ def _csv_rows_for_calc_template(db: Session) -> list[list]:
 ADJUST_HEADER = ["period", "employee_id", "name", "adjustment_pct", "reason"]
 
 
-def adjustment_template_rows(db: Session) -> list[list]:
+def adjustment_template_rows(db: Session, period: str | None = None) -> list[list]:
     """One row per (employee, period) that currently has an active plan."""
     rows = [ADJUST_HEADER]
-    plans = db.scalars(
-        select(BonusPlan).where(BonusPlan.is_current == True, BonusPlan.is_deleted == False)  # noqa: E712
-        .order_by(BonusPlan.period, BonusPlan.employee_id)
-    ).all()
+    stmt = select(BonusPlan).where(BonusPlan.is_current == True, BonusPlan.is_deleted == False)  # noqa: E712
+    if period:
+        stmt = stmt.where(BonusPlan.period == period)
+    plans = db.scalars(stmt.order_by(BonusPlan.period, BonusPlan.employee_id)).all()
     seen: set[tuple] = set()
     for p in plans:
         emp = db.get(User, p.employee_id)

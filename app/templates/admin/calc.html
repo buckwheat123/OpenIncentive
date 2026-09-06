@@ -5,7 +5,13 @@
   <h3 style="margin-top:0">{{ t('calc_title') }}</h3>
   <p class="muted">{{ t('calc_note') }}</p>
   <div class="inline">
-    <a class="btn secondary" href="/admin/calc/template.csv">{{ t('calc_template') }}</a>
+    <form method="get" action="/admin/calc/template.csv" class="inline" style="margin:0">
+      <select name="period">
+        <option value="">{{ t('all') }}</option>
+        {% for p in template_periods %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+      </select>
+      <button class="btn secondary" type="submit">{{ t('calc_template') }}</button>
+    </form>
   </div>
   <p class="muted">{{ t('calc_cols_note') }}</p>
   <form class="inline" method="post" action="/admin/calc/preview" enctype="multipart/form-data">

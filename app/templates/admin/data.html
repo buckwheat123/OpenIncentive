@@ -5,8 +5,14 @@
   <h3 style="margin-top:0">{{ t('delete_title') }}</h3>
   <p class="muted">{{ t('delete_note') }}</p>
   <div class="inline">
-    <a class="btn secondary" href="/admin/data/delete-template.csv?entity=actual">{{ t('actual_template') }}</a>
-    <a class="btn secondary" href="/admin/data/delete-template.csv?entity=plan">{{ t('plan_template') }}</a>
+    <form method="get" action="/admin/data/delete-template.csv" class="inline" style="margin:0">
+      <select name="period">
+        <option value="">{{ t('all') }}</option>
+        {% for p in template_periods %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+      </select>
+      <button class="btn secondary" type="submit" name="entity" value="actual">{{ t('actual_template') }}</button>
+      <button class="btn secondary" type="submit" name="entity" value="plan">{{ t('plan_template') }}</button>
+    </form>
   </div>
 </div>
 

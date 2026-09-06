@@ -12,7 +12,7 @@
   <nav>
     {% if user %}
       {% if user.role == 'ADMIN' %}<a href="/admin">{{ t('admin_console') }}</a>{% endif %}
-      {% if user.role in ('BG_ADMIN', 'ADMIN') %}<a href="/bg">{{ t('bg_view') }}</a><a href="/letters">{{ t('letters') }}</a>{% endif %}
+      {% if user.role in ('BG_ADMIN', 'ADMIN') %}<a href="/bg">{{ t('bg_view') }}</a><a href="/admin/import">{{ t('csv_import') }}</a><a href="/letters">{{ t('letters') }}</a><a href="/letters/data">{{ t('letter_data_import') }}</a>{% endif %}
       {% if user.role in ('MANAGER', 'ADMIN') %}<a href="/team">{{ t('team') }}</a>{% endif %}
       <a href="/me">{{ t('my_bonus') }}</a>
       <span class="who">{{ user.name }}（{{ user.role }}）</span>
@@ -24,6 +24,12 @@
     </span>
   </nav>
 </header>
+{% if user and proxy_admin %}
+<div class="proxy-banner">
+  {{ t('proxy_banner', name=user.name) }} · {{ proxy_admin.name }}（ADMIN）
+  <a class="btn small" href="/proxy/stop">{{ t('proxy_stop') }}</a>
+</div>
+{% endif %}
 <main>
   {% set msg = request.query_params.get('msg') %}
   {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}

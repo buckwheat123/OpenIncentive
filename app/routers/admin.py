@@ -1,27 +1,29 @@
-"""Admin console: users, curves, CSV import (versioned), data deletion (CSV + audit),
-two-pass calculation, adjustments (single + batch CSV), seals, export (year + BG),
+"""Admin console: users (+ proxy BG admin), curves, unified quarterly big-table import
+(versioned, two-pass, shared with BG admins), data deletion (CSV + audit), two-pass
+calculation, adjustments (single + batch CSV), seals, export (year + BG),
 language/translation management."""
 
 import json
 
 from fastapi import APIRouter, Depends, Form, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 
 from ..calc import apply_adjustment, is_locked, run_calculation
 from ..csvio import (_csv_rows_for_calc_template, actual_delete_template_rows, adjustment_template_rows,
-                     apply_deletions, collect_originals, decode_csv, deletion_logs, export_results_rows,
-                     import_actuals, import_employees, import_labels, import_plans, label_rows,
-                     parse_adjustment_rows, plan_delete_template_rows, resolve_employee, to_csv)
+                     apply_deletions, big_error_rows, big_summary, big_template_rows, collect_originals,
+                     decode_csv, deletion_logs, execute_big_import, export_results_rows, import_labels,
+                     label_rows, parse_adjustment_rows, parse_big_rows, plan_delete_template_rows,
+                     recent_periods, resolve_employee, to_csv)
 from ..curves import parse_points
-from ..deps import get_db, require_roles
+from ..deps import SESSION_COOKIE, SESSION_MAX_AGE, get_db, home_for, make_session, require_roles
 from ..i18n import Translator, get_lang, invalidate_label_cache
 from ..models import Adjustment, BonusPlan, BonusResult, CalcRun, Curve, DataOpLog, Label, Lock, User
 from ..security import hash_password
 from ..ui import render
 from .auth import flash
 
-router = APIRouter(prefix="/admin", dependencies=[Depends(require_roles("ADMIN"))])
+router = APIRouter(prefix="/admin")  # per-route role dependencies (import pages also allow BG_ADMIN)
 
 
 def _csv_response(rows: list[list], filename: str) -> Response:
@@ -117,29 +119,86 @@ def curves_save(request: Request, cid: int = Form(0), name: str = Form(...), poi
     return flash("/admin/curves", t.t("msg_curve_saved", name=name))
 
 
-# ---------- CSV import (versioned) ----------
+# ---------- unified quarterly big-table import (ADMIN + BG_ADMIN, two-pass) ----------
+
+def _import_bg_scope(user: User) -> str | None:
+    """BG admins only see/modify their own BG; platform admins see everything."""
+    return user.bg if user.role == "BG_ADMIN" else None
+
 
 @router.get("/import")
-def import_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    return render(request, "admin/import.html", user=user)
+def import_page(request: Request, user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    return render(request, "admin/import.html", user=user, periods=recent_periods(db))
 
 
-@router.post("/import")
-async def do_import(request: Request, employees: UploadFile | None = None, plans: UploadFile | None = None,
-                    actuals: UploadFile | None = None,
-                    user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+@router.get("/import/template.csv")
+def import_template(request: Request, period: str = "",
+                    user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    """Blank template, or prefilled from one of the recent quarters (permission-scoped)."""
+    rows = big_template_rows(db, period=period.strip() or None, bg=_import_bg_scope(user),
+                             with_actual=True)
+    name = f"quarter_import_template{'_' + period.strip() if period.strip() else ''}.csv"
+    return _csv_response(rows, name)
+
+
+@router.post("/import/preview")
+async def import_preview(request: Request, file: UploadFile | None = None,
+                         user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
     t = _t(request)
-    lang = get_lang(request)
-    messages = []
-    for file, fn, label in ((employees, import_employees, "employees"),
-                            (plans, import_plans, "plans"), (actuals, import_actuals, "actuals")):
-        if file is not None and file.filename:
-            try:
-                text = decode_csv(await file.read())
-                messages.append(f"{label}: {fn(db, text, lang)}")
-            except Exception as e:  # noqa: BLE001 - report import errors back to admin
-                messages.append(f"{label}: {t.t('msg_import_failed', e=e)}")
-    return flash("/admin/import", "；".join(messages) or t.t("msg_no_file"))
+    if file is None or not file.filename:
+        return flash("/admin/import", t.t("msg_no_file"))
+    text = decode_csv(await file.read())
+    entries = parse_big_rows(db, text, user, get_lang(request), with_actual=True)
+    if not entries:
+        return flash("/admin/import", t.t("msg_no_rows"))
+    return render(request, "import_preview.html", user=user, rows=entries, csv_text=text,
+                  summary=big_summary(entries), with_actual=True,
+                  execute_url="/admin/import/execute", errors_url="/admin/import/errors.csv",
+                  back_url="/admin/import")
+
+
+@router.post("/import/execute")
+def import_execute(request: Request, csv_text: str = Form(...),
+                   user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    from ..deps import session_payload
+
+    payload = session_payload(request) or {}
+    proxy_note = ""
+    if payload.get("p"):
+        original = db.get(User, payload["p"])
+        if original:
+            proxy_note = f"proxy by {original.employee_id}"
+    msg = execute_big_import(db, csv_text, user, get_lang(request), with_actual=True,
+                             proxy_note=proxy_note)
+    return flash("/admin/import", msg)
+
+
+@router.post("/import/errors.csv")
+def import_errors(request: Request, csv_text: str = Form(...),
+                  user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    rows = big_error_rows(db, csv_text, user, get_lang(request), with_actual=True)
+    return _csv_response(rows, "import_errors.csv")
+
+
+# ---------- proxy: platform admin acts as a BG admin ----------
+
+@router.post("/proxy/{uid}")
+def proxy_start(request: Request, uid: int, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    t = _t(request)
+    target = db.get(User, uid)
+    if not target or target.role != "BG_ADMIN" or not target.is_active:
+        return flash("/admin/users", t.t("msg_proxy_bad_target"))
+    db.add(DataOpLog(op_type="PROXY", entity="session",
+                     entity_ref=f"{user.employee_id} → {target.employee_id}",
+                     reason="start proxy", created_by=user.id))
+    db.commit()
+    from urllib.parse import quote
+
+    dest = f"{home_for(target)}?msg={quote(t.t('msg_proxy_started', name=target.name))}"
+    response = RedirectResponse(dest, status_code=303)
+    response.set_cookie(SESSION_COOKIE, make_session(target.id, proxy_of=user.id),
+                        max_age=SESSION_MAX_AGE, httponly=True, samesite="lax")
+    return response
 
 
 # ---------- data deletion via CSV (with audit log) ----------
@@ -147,14 +206,17 @@ async def do_import(request: Request, employees: UploadFile | None = None, plans
 @router.get("/data")
 def data_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
     logs = deletion_logs(db)
-    return render(request, "admin/data.html", user=user, logs=logs)
+    return render(request, "admin/data.html", user=user, logs=logs,
+                  template_periods=recent_periods(db))
 
 
 @router.get("/data/delete-template.csv")
-def delete_template(entity: str = "actual", user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+def delete_template(request: Request, entity: str = "actual", period: str = "",
+                    user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    p = period.strip() or None
     if entity == "plan":
-        return _csv_response(plan_delete_template_rows(db), "delete_plans_template.csv")
-    return _csv_response(actual_delete_template_rows(db), "delete_actuals_template.csv")
+        return _csv_response(plan_delete_template_rows(db, period=p), "delete_plans_template.csv")
+    return _csv_response(actual_delete_template_rows(db, period=p), "delete_actuals_template.csv")
 
 
 @router.post("/data/delete")
@@ -176,13 +238,16 @@ async def data_delete(request: Request, entity: str = Form("actual"), file: Uplo
 @router.get("/calc")
 def calc_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
     periods = sorted(db.scalars(select(BonusPlan.period).distinct()).all(), reverse=True)
-    return render(request, "admin/calc.html", user=user, periods=periods)
+    return render(request, "admin/calc.html", user=user, periods=periods,
+                  template_periods=recent_periods(db))
 
 
 @router.get("/calc/template.csv")
-def calc_template(user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+def calc_template(request: Request, period: str = "",
+                  user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
     """One row per current plan (period, employee); admin appends action=计算."""
-    return _csv_response(_csv_rows_for_calc_template(db), "calc_template.csv")
+    return _csv_response(_csv_rows_for_calc_template(db, period=period.strip() or None),
+                         "calc_template.csv")
 
 
 def _parse_calc_rows(db, text: str, t: Translator) -> list[dict]:
@@ -289,7 +354,7 @@ def adjust_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depen
     employees = db.scalars(select(User).where(User.role != "ADMIN").order_by(User.employee_id)).all()
     periods = sorted(db.scalars(select(BonusPlan.period).distinct()).all(), reverse=True)
     return render(request, "admin/adjust.html", user=user, adjustments=adjustments,
-                  employees=employees, periods=periods)
+                  employees=employees, periods=periods, template_periods=recent_periods(db))
 
 
 @router.post("/adjust")
@@ -307,8 +372,10 @@ def adjust_save(request: Request, employee_id: int = Form(...), period: str = Fo
 
 
 @router.get("/adjust/template.csv")
-def adjust_template(user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    return _csv_response(adjustment_template_rows(db), "adjustments_template.csv")
+def adjust_template(request: Request, period: str = "",
+                    user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    return _csv_response(adjustment_template_rows(db, period=period.strip() or None),
+                         "adjustments_template.csv")
 
 
 @router.post("/adjust/preview")
