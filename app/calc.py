@@ -2,7 +2,8 @@
 
 Rates:
   unweighted = simple mean of per-KPI payout rates
-  weighted   = sum(weight/100 * rate)
+  weighted   = sum(weight * rate) / sum(weight)  (normalized weighted average,
+               so it stays correct even when the KPI weights do not total 100)
   final      = weighted + special adjustment delta
 No bonus base is stored, so no payable amount is computed.
 """
@@ -51,13 +52,15 @@ def compute_plan(db: Session, plan: BonusPlan, period: str) -> dict:
     """Compute one plan's rates for an employee. Pure with respect to DB state."""
     actuals = current_actuals(db, plan.employee_id, period)
     detail = []
-    weighted_rate = 0.0
+    weighted_num = 0.0   # sum(weight * rate)
+    total_weight = 0.0   # sum(weight)
     rate_sum = 0.0
     for kpi in plan.kpis:
         actual = actuals.get(kpi.kpi_name)
         attainment = (actual / kpi.quota * 100.0) if (actual is not None and kpi.quota) else 0.0
         rate = payout_rate(kpi.curve.points, attainment, kpi.curve.cap_pct)
-        weighted_rate += kpi.weight_pct / 100.0 * rate
+        weighted_num += kpi.weight_pct * rate
+        total_weight += kpi.weight_pct
         rate_sum += rate
         detail.append(
             {
@@ -72,7 +75,7 @@ def compute_plan(db: Session, plan: BonusPlan, period: str) -> dict:
         )
     n = len(plan.kpis)
     unweighted_rate = round(rate_sum / n, 4) if n else 0.0
-    weighted_rate = round(weighted_rate, 4)
+    weighted_rate = round(weighted_num / total_weight, 4) if total_weight else 0.0
     adj = latest_adjustment(db, plan.employee_id, period)
     adjustment_pct = adj.adjustment_pct if adj else 0.0
     final_rate = round(weighted_rate + adjustment_pct, 4)

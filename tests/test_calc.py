@@ -98,8 +98,52 @@ def test_calculation_e2e():
         pass
 
 
+def test_weighted_rate_is_normalized():
+    """weighted_rate_pct must be a true weighted average: sum(w*rate)/sum(w),
+    correct even when the KPI weights do not total 100."""
+    import json
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base
+    from app.calc import compute_plan
+    from app.models import Actual, BonusPlan, Curve, PlanKpi, User
+    from app.security import hash_password
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+
+    emp = User(employee_id="E1", name="Emp", email="e@x.com", bg="Retail",
+               password_hash=hash_password("x"))
+    db.add(emp)
+    db.flush()
+    # linear curve: attainment% -> payout% (rate == attainment)
+    curve = Curve(name="Std", points_json=json.dumps([[0, 0], [100, 100], [200, 200]]), cap_pct=None)
+    db.add(curve)
+    db.flush()
+    plan = BonusPlan(period="2026-Q1", employee_id=emp.id, plan_name="Sales Incentive")
+    db.add(plan)
+    db.flush()
+    # weights total 80 (NOT 100): Sales rate=100, NPS rate=50
+    db.add(PlanKpi(plan_id=plan.id, kpi_name="Sales", weight_pct=50, quota=100, curve_id=curve.id))
+    db.add(PlanKpi(plan_id=plan.id, kpi_name="NPS", weight_pct=30, quota=50, curve_id=curve.id))
+    db.add(Actual(period="2026-Q1", employee_id=emp.id, kpi_name="Sales", actual=100, is_current=True))
+    db.add(Actual(period="2026-Q1", employee_id=emp.id, kpi_name="NPS", actual=25, is_current=True))
+    db.commit()
+
+    calc = compute_plan(db, plan, "2026-Q1")
+    # weighted = (50*100 + 30*50) / (50+30) = 6500/80 = 81.25  (old bug: 0.5*100+0.3*50 = 65)
+    assert calc["weighted_rate_pct"] == 81.25, calc["weighted_rate_pct"]
+    # unweighted = (100 + 50) / 2 = 75
+    assert calc["unweighted_rate_pct"] == 75.0
+    assert calc["final_rate_pct"] == 81.25
+
+
 if __name__ == "__main__":
     test_curves()
     test_password()
     test_calculation_e2e()
+    test_weighted_rate_is_normalized()
     print("ALL TESTS PASSED")
