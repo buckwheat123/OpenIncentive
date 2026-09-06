@@ -58,8 +58,7 @@ def build_plan_table(db, recipient: User, period: str, tr: Translator) -> str:
     summary = ""
     if result:
         adj = (f"　{tr.t('special_adjust')}：{result.adjustment_pct:+.2f} pp" if result.adjusted else "")
-        summary = (f"<p><strong>{tr.t('unweighted_rate')}：{result.unweighted_rate_pct:.2f}%　"
-                   f"{tr.t('weighted_rate')}：{result.weighted_rate_pct:.2f}%{adj}　"
+        summary = (f"<p><strong>{tr.t('weighted_rate')}：{result.weighted_rate_pct:.2f}%{adj}　"
                    f"{tr.t('quarter_total_rate')}：{result.final_rate_pct:.2f}%</strong></p>")
     return (f"<table {TABLE_STYLE}>"
             f"<tr><th>KPI</th><th>{tr.t('target')}</th><th>{tr.t('actual_col')}</th>"

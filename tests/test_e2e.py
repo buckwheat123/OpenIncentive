@@ -173,6 +173,8 @@ def main():
         r = c.get(f"{BASE}/admin/export.csv?year=2026&bg=Retail")
         assert r.status_code == 200 and "plan_name" in r.text and "weighted_rate_pct" in r.text
         assert "bonus_amount" not in r.text
+        assert "comment" in r.text and "weight_total_pct" in r.text   # weighted-only + comment column
+        assert "unweighted_rate_pct" not in r.text                    # unweighted rate removed
         assert "E001" in r.text and "E004" not in r.text    # Commercial excluded by BG filter
         print("[12] export page + year/BG filtered export OK")
 
@@ -285,7 +287,8 @@ def main():
         login(c, "E001", "E001")
         me = c.get(f"{BASE}/me")
         assert "张伟" in me.text
-        assert "未加权支付率" in me.text and "加权支付率" in me.text and "季度总支付率" in me.text
+        assert "加权支付率" in me.text and "季度总支付率" in me.text
+        assert "未加权" not in me.text          # system no longer surfaces unweighted rate
         assert "Q4" in me.text               # four quarters shown horizontally
         assert "华东销售部" in me.text        # department shown (translated)
         assert "销售代表" in me.text          # job title shown

@@ -72,10 +72,9 @@ def test_calculation_e2e():
     assert stats["computed"] == 1
     result = db.scalars(select(BonusResult).where(BonusResult.run_id == run.id)).first()
     assert result.plan_name == "Sales Incentive"
-    # weighted: 0.6*150 + 0.4*50 = 110%
+    # weighted: (60*150 + 40*50) / 100 = 110%
     assert result.weighted_rate_pct == 110.0
-    # unweighted: (150 + 50) / 2 = 100%
-    assert result.unweighted_rate_pct == 100.0
+    assert result.weight_total_pct == 100.0   # weights total 100 -> no comment on export
     assert result.final_rate_pct == 110.0
     assert not result.adjusted
 
@@ -136,8 +135,8 @@ def test_weighted_rate_is_normalized():
     calc = compute_plan(db, plan, "2026-Q1")
     # weighted = (50*100 + 30*50) / (50+30) = 6500/80 = 81.25  (old bug: 0.5*100+0.3*50 = 65)
     assert calc["weighted_rate_pct"] == 81.25, calc["weighted_rate_pct"]
-    # unweighted = (100 + 50) / 2 = 75
-    assert calc["unweighted_rate_pct"] == 75.0
+    assert calc["weight_total_pct"] == 80.0   # != 100 -> export flags a comment
+    assert "unweighted_rate_pct" not in calc  # system no longer provides unweighted rate
     assert calc["final_rate_pct"] == 81.25
 
 

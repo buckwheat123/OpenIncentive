@@ -747,18 +747,25 @@ def import_labels(db: Session, text: str, admin: User, lang: str = DEFAULT_LANG)
 # ---------------------------------------------------------------- export
 
 def export_results_rows(db: Session, bg: str | None = None, period: str | None = None,
-                        year: str | None = None) -> list[list]:
-    """Latest run per period; rates only. Filterable by BG, exact period or year."""
+                        year: str | None = None, lang: str = DEFAULT_LANG) -> list[list]:
+    """Latest run per period; weighted rates only (no unweighted rate is provided).
+
+    Each row carries the employee's total weighted payout rate for that run. If the
+    plan's KPI weights did not total 100% at calculation time, a comment is attached.
+    Filterable by BG, exact period or year.
+    """
     from .models import BonusResult, CalcRun
 
+    t = Translator(lang)
+    not_100_comment = t.t("weight_not_100_comment")
     periods = db.scalars(select(CalcRun.period).distinct()).all()
     if period:
         periods = [p for p in periods if p == period]
     if year:
         periods = [p for p in periods if p.split("-")[0] == year]
     header = ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
-              "unweighted_rate_pct", "weighted_rate_pct", "adjustment_pct", "final_rate_pct",
-              "adjusted", "calculated_at"]
+              "weighted_rate_pct", "weight_total_pct", "adjustment_pct", "final_rate_pct",
+              "adjusted", "comment", "calculated_at"]
     rows = [header]
     for p in sorted(periods):
         run = db.scalars(
@@ -770,11 +777,14 @@ def export_results_rows(db: Session, bg: str | None = None, period: str | None =
             emp = r.employee
             if bg and emp.bg != bg:
                 continue
+            weight_total = r.weight_total_pct
+            comment = "" if abs(weight_total - 100.0) < 1e-6 else not_100_comment
             rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
                          emp.job_title or "", r.plan_name,
-                         f"{r.unweighted_rate_pct:.2f}", f"{r.weighted_rate_pct:.2f}",
+                         f"{r.weighted_rate_pct:.2f}", fmt_num(weight_total),
                          f"{r.adjustment_pct:.2f}", f"{r.final_rate_pct:.2f}",
-                         "Y" if r.adjusted else "", run.created_at.strftime("%Y-%m-%d %H:%M")])
+                         "Y" if r.adjusted else "", comment,
+                         run.created_at.strftime("%Y-%m-%d %H:%M")])
     return rows
 
 

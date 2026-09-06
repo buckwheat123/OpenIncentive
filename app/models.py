@@ -150,8 +150,8 @@ class BonusResult(Base):
     period: Mapped[str] = mapped_column(String(20), index=True)
     plan_name: Mapped[str] = mapped_column(String(100), default="DEFAULT")
     detail_json: Mapped[str] = mapped_column(Text)  # per-KPI breakdown
-    unweighted_rate_pct: Mapped[float] = mapped_column(Float, default=0.0)  # simple mean of KPI rates
     weighted_rate_pct: Mapped[float] = mapped_column(Float, default=0.0)  # weight-averaged rate
+    weight_total_pct: Mapped[float] = mapped_column(Float, default=100.0)  # sum of KPI weights at calc time
     adjustment_pct: Mapped[float] = mapped_column(Float, default=0.0)  # special adjustment delta
     final_rate_pct: Mapped[float] = mapped_column(Float, default=0.0)  # weighted + adjustment
     adjusted: Mapped[bool] = mapped_column(Boolean, default=False)

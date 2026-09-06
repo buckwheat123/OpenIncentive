@@ -23,9 +23,10 @@
     </tr>
     {% endfor %}
   </table>
-  <p>{{ t('unweighted_rate') }} {{ r.unweighted_rate_pct }}% · {{ t('weighted_rate') }} {{ r.weighted_rate_pct }}%
+  <p>{{ t('weighted_rate') }} {{ r.weighted_rate_pct }}%
      {% if r.adjusted %} · {{ t('special_adjust') }} {{ '%+g'|format(r.adjustment_pct) }} pp{% endif %}
-     → {{ t('quarter_total_rate') }} <strong>{{ r.final_rate_pct }}%</strong></p>
+     → {{ t('quarter_total_rate') }} <strong>{{ r.final_rate_pct }}%</strong>
+     {% if (r.weight_total_pct - 100)|abs > 0.000001 %} <span class="tag warn">{{ t('weight_not_100_comment') }}（{{ t('weight_total') }} {{ r.weight_total_pct|g }}%）</span>{% endif %}</p>
   {% else %}
   <p class="muted">{{ t('no_results') }}</p>
   {% endfor %}

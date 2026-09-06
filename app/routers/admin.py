@@ -473,9 +473,10 @@ def export_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depen
 
 
 @router.get("/export.csv")
-def export_csv(period: str | None = None, bg: str | None = None, year: str | None = None,
+def export_csv(request: Request, period: str | None = None, bg: str | None = None, year: str | None = None,
                user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    rows = export_results_rows(db, bg=bg or None, period=period or None, year=year or None)
+    rows = export_results_rows(db, bg=bg or None, period=period or None, year=year or None,
+                               lang=get_lang(request))
     name = "bonus_results" + (f"_{year}" if year else "") + (f"_{bg}" if bg else "") \
            + (f"_{period}" if period else "") + ".csv"
     return _csv_response(rows, name)

@@ -156,15 +156,13 @@ def build_plan_table(db, uid: int, year: int, plan_name: str, tr: Translator) ->
         rows.append({"label": f"{kpi_label} · {tr.t('attainment')}", "cells": attain_cells, "kind": ""})
         rows.append({"label": f"{kpi_label} · {tr.t('payout_rate')}", "cells": rate_cells, "kind": ""})
 
-    for key, kind in (("unweighted_rate", "unweighted"), ("weighted_rate", "weighted"),
+    for key, kind in (("weighted_rate", "weighted"),
                       ("special_adjust", "adj"), ("quarter_total_rate", "final")):
         cells = []
         for q in qdata:
             r = q["result"]
             if not r:
                 cells.append("")
-            elif kind == "unweighted":
-                cells.append(f"{r.unweighted_rate_pct:g}%")
             elif kind == "weighted":
                 cells.append(f"{r.weighted_rate_pct:g}%")
             elif kind == "adj":
@@ -274,9 +272,9 @@ def bg(request: Request, period: str | None = None,
 
 
 @router.get("/bg/export.csv")
-def bg_export(period: str | None = None, user: User = Depends(require_roles("BG_ADMIN", "ADMIN")),
+def bg_export(request: Request, period: str | None = None, user: User = Depends(require_roles("BG_ADMIN", "ADMIN")),
               db=Depends(get_db)):
-    rows = export_results_rows(db, bg=user.bg, period=period)
+    rows = export_results_rows(db, bg=user.bg, period=period, lang=get_lang(request))
     name = f"bonus_history_{user.bg}" + (f"_{period}" if period else "") + ".csv"
     return Response(
         "\ufeff" + to_csv(rows),
