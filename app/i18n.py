@@ -109,7 +109,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "no_members": ("该 BG 暂无成员。", "This BG has no members yet."),
 
     # ---------- admin dashboard ----------
-    "csv_import": ("CSV 导入（员工/计划/实绩）", "CSV Import (employees/plans/actuals)"),
     "trigger_calc": ("触发计算（两步式 CSV）", "Run Calculation (two-pass CSV)"),
     "data_delete": ("数据删除（CSV 留痕）", "Data Deletion (CSV + audit)"),
     "curve_mgmt": ("Curve 管理", "Curve Management"),
@@ -146,6 +145,25 @@ STRINGS: dict[str, tuple[str, str]] = {
     "msg_proxy_started": ("已进入代操作：{name}（BG 管理员）", "Now acting as {name} (BG admin)"),
     "msg_proxy_stopped": ("已退出代操作，恢复管理员身份", "Proxy ended; admin identity restored"),
     "msg_proxy_bad_target": ("只能代操作启用中的 BG 管理员", "Only active BG admins can be proxied"),
+    "users_batch_import": ("批量导入用户（新建 / 更新 / 一致忽略）",
+                           "Batch Import Users (create / update / ignore identical)"),
+    "users_import_note": ("仅平台管理员可用。工号不存在则新建（不填密码即以工号为初始密码），工号已存在则更新有变化的字段，与系统完全一致的行自动忽略、不报错。先上传预览校验，确认后执行。",
+                          "Platform admins only. A new employee ID is created (password defaults to the ID when blank); an existing ID has its changed fields updated; rows fully identical to the system are ignored without error. Upload to preview & validate, then confirm."),
+    "fmt_users": ("表头：employee_id,name,email,role,bg,department,job_title,manager_id,password（role 取 ADMIN/BG_ADMIN/MANAGER/EMPLOYEE，缺省 EMPLOYEE；manager_id 填上级工号且上级须已存在；password 可空）",
+                  "Header: employee_id,name,email,role,bg,department,job_title,manager_id,password (role is ADMIN/BG_ADMIN/MANAGER/EMPLOYEE, default EMPLOYEE; manager_id is the manager's employee ID and must already exist; password optional)"),
+    "row_user_create": ("新建", "Create"),
+    "row_user_update": ("更新信息", "Update"),
+    "row_user_identical": ("忽略（已存在且信息一致）", "Ignored (exists, identical)"),
+    "row_user_dup": ("表内重复（工号或邮箱）", "Duplicate in sheet (employee ID or email)"),
+    "row_invalid_role": ("角色无效：{role}", "Invalid role: {role}"),
+    "row_no_manager": ("上级不存在：{id}", "Manager not found: {id}"),
+    "row_email_taken": ("邮箱已被其他工号占用：{email}", "Email already used by another employee ID: {email}"),
+    "user_summary_counts": ("新建 {c} 人 · 更新 {u} 人 · 忽略 {i} 行 · 报错 {e} 行",
+                            "Create {c} · update {u} · ignored {i} · errors {e}"),
+    "confirm_users_exec": ("确认导入所有「新建 / 更新」行？忽略与报错行不会写入。",
+                           "Import all Create/Update rows? Ignored and errored rows will not be written."),
+    "msg_users_import": ("导入完成：新建 {c} 人、更新 {u} 人；忽略 {i} 行、报错 {e} 行",
+                         "Import done: {c} created, {u} updated; {i} ignored, {e} errored"),
 
     # ---------- curves ----------
     "curve_list": ("Curve 列表", "Curves"),

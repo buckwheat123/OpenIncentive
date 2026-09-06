@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from .calc import is_locked
 from .i18n import DEFAULT_LANG, Translator, invalidate_label_cache
 from .models import Actual, BonusPlan, Curve, DataOpLog, Label, PlanKpi, User
+from .security import hash_password
 
 
 def utcnow() -> datetime:
@@ -362,6 +363,155 @@ def big_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
         raw = e["raw"]
         rows.append([(raw.get(c) or "") for c in big_header(with_actual)]
                     + [e["status"], e["note"]])
+    return rows
+
+
+# ---------------------------------------------------------------- batch user import (ADMIN only)
+#
+# A dedicated roster sheet for user management. Idempotent upsert semantics:
+#   * employee_id not in the system  -> CREATE (password defaults to employee_id)
+#   * employee_id exists, fields differ -> UPDATE the changed fields
+#   * employee_id exists, fully identical -> IGNORED (not an error)
+# Validation: required fields / valid role / in-sheet duplicate id or email /
+# email taken by a different employee_id / manager must already exist.
+
+USER_HEADER = ["employee_id", "name", "email", "role", "bg", "department",
+               "job_title", "manager_id", "password"]
+VALID_ROLES = {"ADMIN", "BG_ADMIN", "MANAGER", "EMPLOYEE"}
+
+
+def user_template_rows() -> list[list]:
+    """Blank batch-user template (header only)."""
+    return [USER_HEADER]
+
+
+def _user_field_changes(db: Session, existing: User, raw: dict) -> dict:
+    """Fields present in the row that differ from the current user record."""
+    changes: dict = {}
+    for field in ("name", "email", "bg", "department", "job_title"):
+        v = (raw.get(field) or "").strip()
+        if v and v != (getattr(existing, field) or ""):
+            changes[field] = v
+    role = (raw.get("role") or "").strip().upper()
+    if role and role != existing.role:
+        changes["role"] = role
+    mgr_ext = (raw.get("manager_id") or "").strip()
+    if mgr_ext:
+        mgr = resolve_employee(db, mgr_ext, "")
+        if mgr and mgr.id != existing.manager_id:
+            changes["manager"] = mgr.id
+    return changes
+
+
+def parse_user_rows(db: Session, text: str, lang: str = DEFAULT_LANG) -> list[dict]:
+    """Pass-1 validation of the batch-user roster. Each entry carries ok/ignored flags,
+    an action ('create'/'update') and a translated status for the preview table."""
+    t = Translator(lang)
+    entries: list[dict] = []
+    seen_ids: set[str] = set()
+    seen_emails: set[str] = set()
+    for raw in _rows(text):
+        emp_id = (raw.get("employee_id") or "").strip()
+        name = (raw.get("name") or "").strip()
+        email = (raw.get("email") or "").strip()
+        if not (emp_id or name or email):
+            continue
+        role = (raw.get("role") or "").strip().upper() or "EMPLOYEE"
+        entry = {
+            "raw": raw, "employee_id": emp_id, "name": name, "email": email, "role": role,
+            "bg": (raw.get("bg") or "").strip(), "department": (raw.get("department") or "").strip(),
+            "job_title": (raw.get("job_title") or "").strip(),
+            "manager_ext": (raw.get("manager_id") or "").strip(),
+            "existing": None, "changes": {}, "action": "",
+            "status": "", "note": "", "ok": False, "ignored": False,
+        }
+        entries.append(entry)
+        missing = [f for f, v in (("employee_id", emp_id), ("name", name), ("email", email)) if not v]
+        if missing:
+            entry["status"] = t.t("row_missing_fields", f=", ".join(missing)); continue
+        if role not in VALID_ROLES:
+            entry["status"] = t.t("row_invalid_role", role=role); continue
+        if emp_id in seen_ids or email in seen_emails:
+            entry["status"] = t.t("row_user_dup"); continue
+        seen_ids.add(emp_id)
+        seen_emails.add(email)
+        if entry["manager_ext"] and resolve_employee(db, entry["manager_ext"], "") is None:
+            entry["status"] = t.t("row_no_manager", id=entry["manager_ext"]); continue
+        existing = db.scalars(select(User).where(User.employee_id == emp_id)).first()
+        by_email = db.scalars(select(User).where(User.email == email)).first()
+        if by_email and (existing is None or by_email.id != existing.id):
+            entry["status"] = t.t("row_email_taken", email=email); continue
+        entry["existing"] = existing
+        if existing is None:
+            entry["action"] = "create"
+            entry["status"] = t.t("row_user_create")
+            entry["ok"] = True
+        else:
+            changes = _user_field_changes(db, existing, raw)
+            entry["changes"] = changes
+            if changes:
+                entry["action"] = "update"
+                entry["status"] = t.t("row_user_update")
+                entry["note"] = ", ".join(sorted(changes))
+                entry["ok"] = True
+            else:
+                entry["ignored"] = True
+                entry["status"] = t.t("row_user_identical")
+    return entries
+
+
+def user_summary(entries: list[dict]) -> dict:
+    return {"create": sum(1 for e in entries if e["ok"] and e["action"] == "create"),
+            "update": sum(1 for e in entries if e["ok"] and e["action"] == "update"),
+            "ignored": sum(1 for e in entries if e["ignored"]),
+            "errors": sum(1 for e in entries if not e["ok"] and not e["ignored"])}
+
+
+def execute_user_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
+                        proxy_note: str = "") -> str:
+    """Pass-2: create/update the valid rows; identical and invalid rows are skipped."""
+    t = Translator(lang)
+    entries = parse_user_rows(db, text, lang)
+    created = updated = 0
+    for e in entries:
+        if not e["ok"]:
+            continue
+        note = f" ({proxy_note})" if proxy_note else ""
+        if e["action"] == "create":
+            mgr = resolve_employee(db, e["manager_ext"], "") if e["manager_ext"] else None
+            password = (e["raw"].get("password") or "").strip() or e["employee_id"]
+            db.add(User(employee_id=e["employee_id"], name=e["name"], email=e["email"],
+                        role=e["role"], bg=e["bg"] or None, department=e["department"] or None,
+                        job_title=e["job_title"] or None, manager_id=mgr.id if mgr else None,
+                        password_hash=hash_password(password)))
+            db.add(DataOpLog(op_type="IMPORT", entity="user", entity_ref=e["employee_id"],
+                             reason="batch user import: create" + note, created_by=actor.id))
+            created += 1
+        else:  # update
+            user = e["existing"]
+            for field, value in e["changes"].items():
+                if field == "manager":
+                    user.manager_id = value
+                else:
+                    setattr(user, field, value)
+            user.updated_at = utcnow()
+            db.add(DataOpLog(op_type="IMPORT", entity="user", entity_ref=e["employee_id"],
+                             reason="batch user import: update " + ", ".join(sorted(e["changes"])) + note,
+                             created_by=actor.id))
+            updated += 1
+    db.commit()
+    summary = user_summary(entries)
+    return t.t("msg_users_import", c=created, u=updated, i=summary["ignored"], e=summary["errors"])
+
+
+def user_error_rows(db: Session, text: str, lang: str = DEFAULT_LANG) -> list[list]:
+    entries = parse_user_rows(db, text, lang)
+    rows = [USER_HEADER + ["status", "note"]]
+    for e in entries:
+        if e["ok"] or e["ignored"]:
+            continue
+        raw = e["raw"]
+        rows.append([(raw.get(c) or "") for c in USER_HEADER] + [e["status"], e["note"]])
     return rows
 
 

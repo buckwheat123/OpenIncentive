@@ -295,6 +295,35 @@ def main():
         assert r.status_code == 303          # peer access denied
         print("[21] employee self view (4-quarter, rates, employee info) & access control OK")
 
+        # ---- batch user import (ADMIN only): create / identical-ignore / validation ----
+        login(c, "BGA1", "BGA1")
+        assert c.get(f"{BASE}/admin/users/import/template.csv", follow_redirects=False).status_code == 303
+        login(c, "ADMIN1", "admin123")
+        users_tpl = c.get(f"{BASE}/admin/users/import/template.csv").text
+        assert "employee_id" in users_tpl and "password" in users_tpl
+        users_csv = (
+            "employee_id,name,email,role,bg,department,job_title,manager_id,password\n"
+            "E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"
+            "E001,张伟,zhang.wei@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"   # identical -> ignored
+            "E007,吴桐,wu.tong@example.com,EMPLOYEE,Retail,Sales East,销售代表,M999,\n"      # bad manager -> error
+            "E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"       # duplicate -> error
+        )
+        r = upload(c, f"{BASE}/admin/users/import/preview", users_csv)
+        assert "预览校验结果" in r.text
+        assert "新建" in r.text and "忽略（已存在且信息一致）" in r.text, r.text[:600]
+        assert "上级不存在" in r.text and "表内重复" in r.text, r.text[:600]
+        assert "新建 1 人" in r.text and "报错 2 行" in r.text, r.text[:600]
+        r = c.post(f"{BASE}/admin/users/import/execute", data={"csv_text": users_csv})
+        assert "导入完成" in r.text and "新建 1 人" in r.text, r.text[:600]
+        db.expire_all()
+        assert db.query(User).filter_by(employee_id="E005").first() is not None
+        users_page = c.get(f"{BASE}/admin/users").text
+        assert "E005" in users_page and "孙悦" in users_page
+        r = c.post(f"{BASE}/admin/users/import/errors.csv", data={"csv_text": users_csv})
+        assert "status" in r.text and "E007" in r.text and "M999" in r.text
+        assert "zhang.wei@example.com" not in r.text      # identical/ignored row excluded from errors
+        print("[22] batch user import (ADMIN-only, create/ignore/validation) OK")
+
     db.close()
     print("E2E ALL PASSED")
 

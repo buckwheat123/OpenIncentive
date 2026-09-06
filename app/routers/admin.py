@@ -12,9 +12,10 @@ from sqlalchemy import select
 from ..calc import apply_adjustment, is_locked, run_calculation
 from ..csvio import (_csv_rows_for_calc_template, actual_delete_template_rows, adjustment_template_rows,
                      apply_deletions, big_error_rows, big_summary, big_template_rows, collect_originals,
-                     decode_csv, deletion_logs, execute_big_import, export_results_rows, import_labels,
-                     label_rows, parse_adjustment_rows, parse_big_rows, plan_delete_template_rows,
-                     recent_periods, resolve_employee, to_csv)
+                     decode_csv, deletion_logs, execute_big_import, execute_user_import, export_results_rows,
+                     import_labels, label_rows, parse_adjustment_rows, parse_big_rows, parse_user_rows,
+                     plan_delete_template_rows, recent_periods, resolve_employee, to_csv, user_error_rows,
+                     user_summary, user_template_rows)
 from ..curves import parse_points
 from ..deps import SESSION_COOKIE, SESSION_MAX_AGE, get_db, home_for, make_session, require_roles
 from ..i18n import Translator, get_lang, invalidate_label_cache
@@ -72,6 +73,41 @@ def users_create(request: Request, name: str = Form(...), employee_id: str = For
     db.commit()
     return flash("/admin/users", t.t("msg_user_created", uid=employee_id,
                                      pw=t.t("msg_pw_custom" if password else "msg_pw_default")))
+
+
+# ---------- batch user import (ADMIN only, two-pass: create / update / ignore identical) ----------
+
+@router.get("/users/import/template.csv")
+def users_import_template(user=Depends(require_roles("ADMIN"))):
+    return _csv_response(user_template_rows(), "users_import_template.csv")
+
+
+@router.post("/users/import/preview")
+async def users_import_preview(request: Request, file: UploadFile | None = None,
+                               user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    t = _t(request)
+    if file is None or not file.filename:
+        return flash("/admin/users", t.t("msg_no_file"))
+    text = decode_csv(await file.read())
+    entries = parse_user_rows(db, text, get_lang(request))
+    if not entries:
+        return flash("/admin/users", t.t("msg_no_rows"))
+    return render(request, "admin/user_import_preview.html", user=user, rows=entries,
+                  csv_text=text, summary=user_summary(entries))
+
+
+@router.post("/users/import/execute")
+def users_import_execute(request: Request, csv_text: str = Form(...),
+                         user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    msg = execute_user_import(db, csv_text, user, get_lang(request))
+    return flash("/admin/users", msg)
+
+
+@router.post("/users/import/errors.csv")
+def users_import_errors(request: Request, csv_text: str = Form(...),
+                        user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    rows = user_error_rows(db, csv_text, get_lang(request))
+    return _csv_response(rows, "users_import_errors.csv")
 
 
 @router.post("/users/{uid}/toggle")

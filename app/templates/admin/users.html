@@ -20,6 +20,18 @@
   </form>
 </div>
 <div class="card">
+  <h3>{{ t('users_batch_import') }}</h3>
+  <p class="muted">{{ t('users_import_note') }}</p>
+  <div class="inline">
+    <a class="btn secondary" href="/admin/users/import/template.csv">{{ t('template_download') }}</a>
+  </div>
+  <form method="post" action="/admin/users/import/preview" enctype="multipart/form-data" class="inline">
+    <input type="file" name="file" accept=".csv" required>
+    <button class="btn" type="submit">{{ t('upload_preview') }}</button>
+  </form>
+  <p class="muted">{{ t('fmt_users') }}</p>
+</div>
+<div class="card">
   <table>
     <tr><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th><th>{{ t('role') }}</th>
         <th>{{ t('bg') }}</th><th>{{ t('department') }}</th><th>{{ t('job_title') }}</th>

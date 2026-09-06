@@ -90,7 +90,7 @@ python -m venv .venv
    - 上传前可**下载模板**：空白模板，或从**最近 3 个季度**中选一个、按当前用户权限预填（BG 管理员只含本 BG 数据）。
    - 表头 `period,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,quota,curve_name,actual`，一行一个 KPI；每人首行填写员工信息列即可（其余行可留空）。`curve_name` 必须先存在。示例见 `sample_data/quarter_import.csv`。
    - **两步式**：第一步上传 → 逐行校验并预览（可导入 / 忽略 / 各类报错）+ 汇总计数；第二步确认执行 → 通过的行生成计划新版本、更新实绩与员工信息，出错的行可下载 `errors.csv` 修正后重传。
-   - 员工不再由导入创建；新员工请先在「用户管理」页建好。
+   - 员工不由季度大表创建；新员工请先在「用户管理」页建好（可逐个新建，或用下方**批量导入用户**）。
 2. **通知信数据导入**（通知信 → 通知信数据导入，v4 独立界面）：与季度大表字段几乎一致，但**不含 `actual` 实绩列**；同样支持模板下载、两步式预览/执行。示例见 `sample_data/letter_data.csv`。
 3. **Curve 管理**：分段线性插值点 `达成率%:支付率%`（如 `0:0,80:50,100:100,150:200`），可设封顶；区间外按端点取值（不外推）。页面展示每段的区间斜率。
 4. **两步式触发计算**（后台 → 触发计算）：
@@ -103,6 +103,7 @@ python -m venv .venv
 7. **封存**：按「期间 + BG」封存，不可撤销；封存后导入、调整、删除、计算均跳过该范围，仅可读取与导出。
 8. **导出**（后台 → 导出结果）：选择**年份**与 **BG**（均可不选即全部），生成含未加权/加权/调整/最终四类费率的 CSV；BG 管理员仍下载本 BG 完整历史。
 9. **代操作（proxy，v4）**：平台管理员在「用户管理」页对任一在职 BG 管理员点击「代操作」，即以其身份进入 BG 视图/导入/通知信等页面；页面顶部显示醒目的代操作横幅，「退出代操作」一键恢复管理员身份。代操作的开始与结束均写入审计日志，期间的导入也在原因中标注 proxy 来源。BG 管理员越权访问后台会被拒绝。
+10. **批量导入用户（仅平台管理员，v4）**：在「用户管理」页下载模板（表头 `employee_id,name,email,role,bg,department,job_title,manager_id,password`）→ 上传预览校验 → 确认执行。采用幂等的 upsert 语义：**工号不存在则新建**（`password` 留空即以工号为初始密码）、**工号已存在则只更新有变化的字段**、**与系统完全一致的行自动忽略**（不报错、可反复上传同一份花名册）。校验项：必填（工号/姓名/邮箱）、角色合法性（ADMIN/BG_ADMIN/MANAGER/EMPLOYEE）、表内工号或邮箱重复、邮箱被其他工号占用、上级工号须已存在。逐条写入审计日志，报错行可下载 errors.csv 修正后重传。示例见 `sample_data/users_import.csv`。
 
 ## 查看（角色化）
 
@@ -140,13 +141,13 @@ set SMTP_HOST=smtp.example.com& SMTP_PORT=587& SMTP_USER=...& SMTP_PASSWORD=...&
 ```bash
 .venv/Scripts/python tests/test_calc.py     # 引擎单测（离线，含端到端计算与区间斜率）
 # 先启动服务（.venv/Scripts/python run.py），再：
-.venv/Scripts/python tests/test_e2e.py      # 端到端 21 步（大表两步导入/逐行校验/一致忽略/报错清单/模板预填与BG范围/两步计算/调整与批量/封存/期间筛选模板/导出筛选/通知信数据导入/代操作/语言管理/中英切换/多层团队/四季度/已阅）
+.venv/Scripts/python tests/test_e2e.py      # 端到端 22 步（大表两步导入/逐行校验/一致忽略/报错清单/模板预填与BG范围/两步计算/调整与批量/封存/期间筛选模板/导出筛选/通知信数据导入/代操作/批量导入用户/语言管理/中英切换/多层团队/四季度/已阅）
 ```
 
 ```
 app/            应用代码（db/models/curves/calc/csvio/i18n/mailer/security/deps/routers/templates）
 data/           SQLite 数据库、密钥、本地发件箱（运行生成）
-sample_data/    示例 CSV（v4：quarter_import.csv 季度大表、letter_data.csv 通知信数据）
+sample_data/    示例 CSV（v4：quarter_import.csv 季度大表、letter_data.csv 通知信数据、users_import.csv 批量用户）
 seed.py         演示数据种子脚本（重建库，含演示翻译词条）
 run.py          开发服务器入口
 ```

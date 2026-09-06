@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ t('users_batch_import') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>{{ t('preview_result') }}</h3>
+  <p class="summary-counts">{{ t('user_summary_counts', c=summary.create, u=summary.update, i=summary.ignored, e=summary.errors) }}</p>
+  <p class="muted">{{ t('preview_note') }}</p>
+  <table>
+    <tr>
+      <th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th>
+      <th>{{ t('role') }}</th><th>{{ t('bg') }}</th><th>{{ t('department') }}</th>
+      <th>{{ t('job_title') }}</th><th>{{ t('manager') }}</th>
+      <th>{{ t('status') }}</th><th>{{ t('note') }}</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.employee_id }}</td>
+      <td>{{ r.name }}</td>
+      <td>{{ r.email }}</td>
+      <td>{{ r.role }}</td>
+      <td>{{ r.bg }}</td>
+      <td>{{ r.department }}</td>
+      <td>{{ r.job_title }}</td>
+      <td>{{ r.manager_ext }}</td>
+      <td>{% if r.ok %}<span class="tag ok">{{ r.status }}</span>{% elif r.ignored %}<span class="tag">{{ r.status }}</span>{% else %}<span class="tag warn">{{ r.status }}</span>{% endif %}</td>
+      <td>{{ r.note }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <div class="inline">
+    <form method="post" action="/admin/users/import/execute"
+          onsubmit="return confirm('{{ t('confirm_users_exec') }}')">
+      <input type="hidden" name="csv_text" value="{{ csv_text }}">
+      <button class="btn" type="submit">{{ t('confirm_execute') }}</button>
+    </form>
+    {% if summary.errors %}
+    <form method="post" action="/admin/users/import/errors.csv">
+      <input type="hidden" name="csv_text" value="{{ csv_text }}">
+      <button class="btn" type="submit">{{ t('download_errors') }}</button>
+    </form>
+    {% endif %}
+    <a class="btn" href="/admin/users">{{ t('back') }}</a>
+  </div>
+</div>
+{% endblock %}
