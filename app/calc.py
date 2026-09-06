@@ -1,10 +1,13 @@
 """Bonus calculation engine: plan + YTD actuals + curves -> rates only.
 
 Rates:
-  weighted   = sum(weight * rate) / sum(weight)  (normalized weighted average,
-               so it stays correct even when the KPI weights do not total 100)
+  weighted   = sum(weight_pct / 100 * rate)  (plain weighted sum; the KPI weights
+               are NOT renormalized, so when they total less/more than 100 the rate
+               scales accordingly -- this is sometimes intentional and left as-is)
   final      = weighted + special adjustment delta
 The unweighted (simple-mean) rate is intentionally NOT provided by this system.
+When the KPI weights do not total 100%, the run records the weight total so the
+export can flag it with a comment; the rate itself is not adjusted.
 No bonus base is stored, so no payable amount is computed.
 """
 
@@ -52,13 +55,13 @@ def compute_plan(db: Session, plan: BonusPlan, period: str) -> dict:
     """Compute one plan's rates for an employee. Pure with respect to DB state."""
     actuals = current_actuals(db, plan.employee_id, period)
     detail = []
-    weighted_num = 0.0   # sum(weight * rate)
-    total_weight = 0.0   # sum(weight)
+    weighted_rate = 0.0   # sum(weight_pct/100 * rate); weights are NOT renormalized
+    total_weight = 0.0    # sum(weight), recorded only to flag when it != 100
     for kpi in plan.kpis:
         actual = actuals.get(kpi.kpi_name)
         attainment = (actual / kpi.quota * 100.0) if (actual is not None and kpi.quota) else 0.0
         rate = payout_rate(kpi.curve.points, attainment, kpi.curve.cap_pct)
-        weighted_num += kpi.weight_pct * rate
+        weighted_rate += kpi.weight_pct / 100.0 * rate
         total_weight += kpi.weight_pct
         detail.append(
             {
@@ -71,7 +74,7 @@ def compute_plan(db: Session, plan: BonusPlan, period: str) -> dict:
                 "rate_pct": rate,
             }
         )
-    weighted_rate = round(weighted_num / total_weight, 4) if total_weight else 0.0
+    weighted_rate = round(weighted_rate, 4)
     adj = latest_adjustment(db, plan.employee_id, period)
     adjustment_pct = adj.adjustment_pct if adj else 0.0
     final_rate = round(weighted_rate + adjustment_pct, 4)

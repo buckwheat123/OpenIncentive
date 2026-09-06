@@ -97,9 +97,11 @@ def test_calculation_e2e():
         pass
 
 
-def test_weighted_rate_is_normalized():
-    """weighted_rate_pct must be a true weighted average: sum(w*rate)/sum(w),
-    correct even when the KPI weights do not total 100."""
+def test_weighted_rate_keeps_partial_weight_sum():
+    """weighted_rate_pct is a plain weighted sum: sum(weight_pct/100 * rate).
+    When the KPI weights do not total 100 the rate is NOT renormalized (that is
+    sometimes intentional); the weight total is only recorded so the export can
+    flag it with a comment."""
     import json
 
     from sqlalchemy import create_engine
@@ -133,16 +135,16 @@ def test_weighted_rate_is_normalized():
     db.commit()
 
     calc = compute_plan(db, plan, "2026-Q1")
-    # weighted = (50*100 + 30*50) / (50+30) = 6500/80 = 81.25  (old bug: 0.5*100+0.3*50 = 65)
-    assert calc["weighted_rate_pct"] == 81.25, calc["weighted_rate_pct"]
+    # plain weighted sum (NOT normalized): 50/100*100 + 30/100*50 = 50 + 15 = 65
+    assert calc["weighted_rate_pct"] == 65.0, calc["weighted_rate_pct"]
     assert calc["weight_total_pct"] == 80.0   # != 100 -> export flags a comment
     assert "unweighted_rate_pct" not in calc  # system no longer provides unweighted rate
-    assert calc["final_rate_pct"] == 81.25
+    assert calc["final_rate_pct"] == 65.0
 
 
 if __name__ == "__main__":
     test_curves()
     test_password()
     test_calculation_e2e()
-    test_weighted_rate_is_normalized()
+    test_weighted_rate_keeps_partial_weight_sum()
     print("ALL TESTS PASSED")
