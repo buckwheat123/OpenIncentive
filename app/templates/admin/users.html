@@ -32,12 +32,19 @@
   <p class="muted">{{ t('fmt_users') }}</p>
 </div>
 <div class="card">
+  <form id="batch-toggle" method="post" action="/admin/users/batch-toggle" class="inline batch-bar">
+    <button class="btn danger small" type="submit" name="action" value="disable">{{ t('batch_disable') }}</button>
+    <button class="btn secondary small" type="submit" name="action" value="enable">{{ t('batch_enable') }}</button>
+  </form>
   <table>
-    <tr><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th><th>{{ t('role') }}</th>
-        <th>{{ t('bg') }}</th><th>{{ t('department') }}</th><th>{{ t('job_title') }}</th>
-        <th>{{ t('info_updated_at') }}</th><th>{{ t('status') }}</th><th></th></tr>
+    <tr>
+      <th><input type="checkbox" onclick="document.querySelectorAll('input[name=uids]').forEach(function(c){c.checked=this.checked;}, this)"></th>
+      <th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th><th>{{ t('role') }}</th>
+      <th>{{ t('bg') }}</th><th>{{ t('department') }}</th><th>{{ t('job_title') }}</th>
+      <th>{{ t('info_updated_at') }}</th><th>{{ t('status') }}</th><th></th></tr>
     {% for u in users %}
     <tr>
+      <td>{% if u.id != user.id %}<input type="checkbox" name="uids" value="{{ u.id }}" form="batch-toggle">{% endif %}</td>
       <td>{{ u.employee_id }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
       <td>{{ u.role }}</td><td>{{ tl(u.bg) or '-' }}</td>
       <td>{{ tl(u.department) or '-' }}</td><td>{{ tl(u.job_title) or '-' }}</td>

@@ -36,8 +36,20 @@
   <form class="inline" method="post" action="/admin/locks"
         onsubmit="return confirm('{{ t('confirm_seal') }}')">
     <div><label>{{ t('period') }}</label><input name="period" list="period-list" required></div>
-    <div><label>{{ t('bg') }}</label>
-      <select name="bg">{% for b in bgs %}<option value="{{ b }}">{{ tl(b) }}</option>{% endfor %}</select>
+    <div class="seal-bgs">
+      <label>{{ t('bg') }}</label>
+      <div class="bg-checks">
+        <label class="bg-check master">
+          <input type="checkbox" onclick="document.querySelectorAll('.bg-check input[data-bg]').forEach(function(c){c.checked=this.checked;}, this)">
+          <b>{{ t('select_all') }}</b>
+        </label>
+        {% for b in bgs %}
+        <label class="bg-check">
+          <input type="checkbox" name="bgs" value="{{ b }}" data-bg="{{ b }}">
+          <span>{{ tl(b) }}</span>
+        </label>
+        {% endfor %}
+      </div>
     </div>
     <button class="btn danger" type="submit">{{ t('seal') }}</button>
   </form>

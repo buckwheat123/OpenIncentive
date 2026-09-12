@@ -31,14 +31,17 @@ QUARTER_CSV = "\n".join([
     # E001 — info identical to seed (no user update)
     "2027-Q1,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,1200000,Standard Curve,1150000",
     "2027-Q1,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve,92",
-    # E002 — department changed to Sales South (triggers an employee-info update)
+    # E002 — Revenue first appears with actual 980000 ...
     "2027-Q1,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,1100000,Standard Curve,980000",
     "2027-Q1,E002,李娜,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve,88",
-    # ---- error rows ----
+    # ... then again with 990000. Feature #7: the LATER row wins and supersedes the
+    # earlier one (not a "duplicate" error); it carries the employee-info columns
+    # (department Sales South) so the info update still applies via the surviving row.
+    "2027-Q1,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,1100000,Standard Curve,990000",
+    # ---- genuine error rows ----
     "2027-Q1,E999,王五,,,,,,,Sales Incentive,Revenue,60,1000000,Standard Curve,900000",   # unknown user
-    "2027-Q1,E002,李娜,,,,,,,Sales Incentive,Revenue,60,1100000,Standard Curve,990000",      # duplicate in sheet
-    "2027-Q1,E001,张伟,,,,,,,Sales Incentive,NewKpi,,100,CurveX,50",                          # missing weight_pct
-    "2027-Q1,E002,李娜,,,,,,,Sales Incentive,ExtraKpi,50,100,CurveX,50",                      # curve not found
+    "2027-Q1,E001,张伟,,,,,,,Sales Incentive,NewKpi,,100,CurveX,50",                        # missing weight_pct
+    "2027-Q1,E002,李娜,,,,,,,Sales Incentive,ExtraKpi,50,100,CurveX,50",                    # curve not found
 ]) + "\n"
 
 # Letter-data sheet (same columns minus `actual`) for a fresh person/period.
@@ -81,10 +84,10 @@ def main():
         assert "可导入" in r.text                       # valid rows
         assert "员工不存在" in r.text                    # E999
         assert "Curve 不存在" in r.text                  # CurveX
-        assert "表内重复" in r.text                       # duplicate E002 Revenue
+        assert "已被后续行覆盖" in r.text                 # earlier E002 Revenue superseded (#7)
         assert "缺失必填项" in r.text                     # missing weight_pct
-        assert "可导入 4 行" in r.text and "报错 4 行" in r.text, r.text[:600]
-        print("[2] big-table preview validation (ok/unknown/curve/dup/missing) OK")
+        assert "可导入 4 行" in r.text and "忽略 1 行" in r.text and "报错 3 行" in r.text, r.text[:600]
+        print("[2] big-table preview validation (ok/unknown/curve/supersede/missing) OK")
 
         # ---- pass-2 execute: creates plans + actuals, updates one employee's info ----
         r = c.post(f"{BASE}/admin/import/execute", data={"csv_text": QUARTER_CSV})
@@ -100,12 +103,17 @@ def main():
         rev = db.query(Actual).filter_by(period="2027-Q1", employee_id=e001.id,
                                          kpi_name="Revenue", is_current=True).first()
         assert rev and abs(rev.actual - 1150000) < 1e-6
-        print("[3] big-table execute (new plan version, actuals, employee-info update) OK")
+        # #7: the later E002 Revenue row (990000) won and was the one persisted.
+        rev2 = db.query(Actual).filter_by(period="2027-Q1", employee_id=e002.id,
+                                          kpi_name="Revenue", is_current=True).first()
+        assert rev2 and abs(rev2.actual - 990000) < 1e-6
+        print("[3] big-table execute (new plan version, later-row-wins actual, info update) OK")
 
         # ---- identical re-upload is IGNORED, not an error, no new version ----
         r = upload(c, f"{BASE}/admin/import/preview", QUARTER_CSV)
         assert "忽略（与系统数据一致）" in r.text, r.text[:600]
-        assert "忽略 4 行" in r.text, r.text[:600]
+        assert "已被后续行覆盖" in r.text, r.text[:600]
+        assert "忽略 5 行" in r.text, r.text[:600]
         print("[4] identical re-upload ignored OK")
 
         # ---- error-list CSV download ----
@@ -139,13 +147,15 @@ def main():
         assert "已记录特殊调整" in r.text and "E2E 测试特批" in r.text
         print("[8] additive special adjustment OK")
 
-        # ---- seal blocks adjustments ----
-        r = c.post(f"{BASE}/admin/locks", data={"period": "2026-Q1", "bg": "Retail"})
-        assert "已封存" in r.text
+        # ---- one-click seal multiple BGs blocks adjustments (#2) ----
+        r = c.post(f"{BASE}/admin/locks", data={"period": "2026-Q1", "bgs": ["Retail", "Commercial"]})
+        assert "已封存" in r.text and "本次新封存 2 个 BG" in r.text, r.text[:400]
+        r = c.post(f"{BASE}/admin/locks", data={"period": "2026-Q1", "bgs": ["Retail", "Commercial"]})
+        assert "本次新封存 0 个 BG" in r.text and "2 个此前已封存" in r.text, r.text[:400]
         r = c.post(f"{BASE}/admin/adjust", data={
             "employee_id": e001.id, "period": "2026-Q1", "adjustment_pct": "50", "reason": "应被拒绝"})
         assert "已封存" in r.text
-        print("[9] seal blocks adjustments OK")
+        print("[9] one-click multi-BG seal blocks adjustments OK")
 
         # ---- batch adjustments via CSV (two-pass) ----
         adj_csv = ("period,employee_id,name,adjustment_pct,reason\n"
@@ -319,25 +329,50 @@ def main():
         users_csv = (
             "employee_id,name,email,role,bg,department,job_title,manager_id,password\n"
             "E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"
-            "E001,张伟,zhang.wei@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"   # identical -> ignored
-            "E007,吴桐,wu.tong@example.com,EMPLOYEE,Retail,Sales East,销售代表,M999,\n"      # bad manager -> error
-            "E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"       # duplicate -> error
+            "E007,吴桐,wu.tong@example.com,EMPLOYEE,Retail,Sales East,销售代表,M010,\n"    # forward-ref to M010 (defined next)
+            "M010,赵敏,zhao.min@example.com,MANAGER,Retail,Sales East,销售经理,M001,\n"     # brand-new manager in same sheet
+            "E008,郑华,zheng.hua@example.com,EMPLOYEE,Retail,Sales East,销售代表,M999,\n"    # missing manager -> admin proxy
+            "E001,张伟,zhang.wei@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"    # identical -> ignored
+            "E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"      # duplicate -> error
         )
         r = upload(c, f"{BASE}/admin/users/import/preview", users_csv)
         assert "预览校验结果" in r.text
         assert "新建" in r.text and "忽略（已存在且信息一致）" in r.text, r.text[:600]
-        assert "上级不存在" in r.text and "表内重复" in r.text, r.text[:600]
-        assert "新建 1 人" in r.text and "报错 2 行" in r.text, r.text[:600]
+        assert "上级不存在" not in r.text                    # #1: missing manager is no longer an error
+        assert "表内重复" in r.text                           # duplicate E005 is still an error
+        assert "新建 4 人" in r.text and "报错 1 行" in r.text, r.text[:600]
         r = c.post(f"{BASE}/admin/users/import/execute", data={"csv_text": users_csv})
-        assert "导入完成" in r.text and "新建 1 人" in r.text, r.text[:600]
+        assert "导入完成" in r.text and "新建 4 人" in r.text, r.text[:600]
         db.expire_all()
-        assert db.query(User).filter_by(employee_id="E005").first() is not None
+        e005 = db.query(User).filter_by(employee_id="E005").first()
+        e007 = db.query(User).filter_by(employee_id="E007").first()
+        m010 = db.query(User).filter_by(employee_id="M010").first()
+        e008 = db.query(User).filter_by(employee_id="E008").first()
+        admin = db.query(User).filter_by(role="ADMIN").first()
+        assert e005 and m010 and m010.role == "MANAGER"
+        assert e007 and e007.manager_id == m010.id          # #1: same-sheet manager linked
+        assert e008 and e008.manager_id == admin.id         # #1: unknown manager -> ADMIN proxy
         users_page = c.get(f"{BASE}/admin/users").text
         assert "E005" in users_page and "孙悦" in users_page
         r = c.post(f"{BASE}/admin/users/import/errors.csv", data={"csv_text": users_csv})
-        assert "status" in r.text and "E007" in r.text and "M999" in r.text
-        assert "zhang.wei@example.com" not in r.text      # identical/ignored row excluded from errors
-        print("[22] batch user import (ADMIN-only, create/ignore/validation) OK")
+        assert "status" in r.text and "表内重复" in r.text
+        assert "M999" not in r.text                          # E008 is valid now, not an error row
+        assert "zhang.wei@example.com" not in r.text         # identical/ignored row excluded from errors
+        print("[22] batch user import (create/ignore/validation, new-manager + admin-proxy) OK")
+
+        # ---- ADMIN batch disable / re-enable users (#5) ----
+        uids = [e005.id, e007.id, e008.id]
+        r = c.post(f"{BASE}/admin/users/batch-toggle", data={"uids": uids, "action": "disable"})
+        assert "批量操作完成" in r.text and "停用 3 人" in r.text, r.text[:400]
+        db.expire_all()
+        assert all(not db.get(User, uid).is_active for uid in uids)
+        r = c.post(f"{BASE}/admin/users/batch-toggle",
+                   data={"uids": uids + [admin.id], "action": "enable"})
+        assert "启用 3 人" in r.text and "跳过 1 人" in r.text, r.text[:400]
+        db.expire_all()
+        assert all(db.get(User, uid).is_active for uid in uids)
+        assert db.get(User, admin.id).is_active              # acting admin never toggled
+        print("[22b] ADMIN batch disable/enable users (self skipped) OK")
 
     db.close()
     print("E2E ALL PASSED")

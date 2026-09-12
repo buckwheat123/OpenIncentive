@@ -148,6 +148,25 @@ def fmt_num(value) -> str:
     return f"{f:.4f}".rstrip("0").rstrip(".")
 
 
+def _group_info_raw(rows: list[dict]) -> dict:
+    """Merge employee-info columns across a plan group's rows.
+
+    The big sheet only carries the info columns on a person's first row, but after
+    the later-row-wins override (#7) the info-bearing row may not be the first valid
+    row of the group. Take the first non-empty value per info field across the rows so
+    an info update is detected no matter which row carries it.
+    """
+    info_fields = ("name", "email", "bg", "department", "job_title", "role", "manager_id")
+    merged: dict = {}
+    for field in info_fields:
+        for r in rows:
+            v = (r["raw"].get(field) or "").strip()
+            if v:
+                merged[field] = v
+                break
+    return merged
+
+
 def _user_info_changes(db: Session, employee: User, raw: dict, actor: User) -> dict:
     """Employee-info fields provided in the row that differ from the current record."""
     changes: dict = {}
@@ -172,7 +191,7 @@ def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
     and a translated status for the preview table."""
     t = Translator(lang)
     entries: list[dict] = []
-    seen: set[tuple] = set()
+    by_key: dict[tuple, int] = {}
     for raw in _rows(text):
         if not any((raw.get(c) or "").strip() for c in ("period", "employee_id", "name", "kpi_name")):
             continue
@@ -189,6 +208,7 @@ def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
             "actual": _num(raw.get("actual")) if with_actual else None,
             "curve_id": None, "status": "", "note": "", "ok": False, "ignored": False,
         }
+        idx = len(entries)
         entries.append(entry)
         if not period:
             entry["status"] = t.t("row_no_period"); continue
@@ -198,10 +218,14 @@ def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
             entry["status"] = t.t("row_out_of_bg"); continue
         if is_locked(db, period, employee.bg):
             entry["status"] = t.t("row_sealed"); entry["note"] = f"{period}/{employee.bg}"; continue
+        # Same period+employee+plan+KPI appearing again -> the LATER row overrides the
+        # earlier one (before sealing). Mark the previous occurrence as superseded.
         key = (period, employee.id, plan_name, kpi_name)
-        if key in seen:
-            entry["status"] = t.t("row_dup"); continue
-        seen.add(key)
+        if key in by_key:
+            prev = entries[by_key[key]]
+            if prev["ok"]:
+                prev.update(ok=False, ignored=True, status=t.t("row_overwritten"))
+        by_key[key] = idx
         missing = [f for f, v in (("plan_name", plan_name), ("kpi_name", kpi_name),
                                   ("curve_name", curve_name),
                                   ("weight_pct", (raw.get("weight_pct") or "").strip()),
@@ -267,7 +291,7 @@ def _mark_identical_groups(db: Session, entries: list[dict], actor: User,
                     identical = False
                     break
         employee = db.get(User, emp_id)
-        if identical and not _user_info_changes(db, employee, rows[0]["raw"], actor):
+        if identical and not _user_info_changes(db, employee, _group_info_raw(rows), actor):
             for e in rows:
                 e.update(ok=False, ignored=True, status=t.t("row_identical"))
 
@@ -299,7 +323,7 @@ def execute_big_import(db: Session, text: str, actor: User, lang: str = DEFAULT_
     for period, emp_id, plan_name in order:
         rows = groups[(period, emp_id, plan_name)]
         employee = db.get(User, emp_id)
-        changes = _user_info_changes(db, employee, rows[0]["raw"], actor)
+        changes = _user_info_changes(db, employee, _group_info_raw(rows), actor)
         if changes:
             for field, value in changes.items():
                 if field == "manager":
@@ -436,8 +460,6 @@ def parse_user_rows(db: Session, text: str, lang: str = DEFAULT_LANG) -> list[di
             entry["status"] = t.t("row_user_dup"); continue
         seen_ids.add(emp_id)
         seen_emails.add(email)
-        if entry["manager_ext"] and resolve_employee(db, entry["manager_ext"], "") is None:
-            entry["status"] = t.t("row_no_manager", id=entry["manager_ext"]); continue
         existing = db.scalars(select(User).where(User.employee_id == emp_id)).first()
         by_email = db.scalars(select(User).where(User.email == email)).first()
         if by_email and (existing is None or by_email.id != existing.id):
@@ -470,35 +492,64 @@ def user_summary(entries: list[dict]) -> dict:
 
 def execute_user_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
                         proxy_note: str = "") -> str:
-    """Pass-2: create/update the valid rows; identical and invalid rows are skipped."""
+    """Pass-2: create/update the valid rows; identical and invalid rows are skipped.
+
+    Managers are resolved in this order: existing DB user → a user created earlier in
+    this same sheet → a platform ADMIN as a temporary proxy (logged). This lets a
+    roster sheet define brand-new managers and reference them immediately.
+    """
     t = Translator(lang)
     entries = parse_user_rows(db, text, lang)
-    created = updated = 0
+    created_map: dict[str, User] = {}
+    created = updated = mgr_proxied = 0
+
+    def _admin_fallback() -> User | None:
+        return db.scalars(select(User).where(User.role == "ADMIN",
+                                             User.is_active == True)).first()  # noqa: E712
+
+    # Pass 1: create new users (manager resolved in pass 2 so forward references work).
+    for e in entries:
+        if e["ok"] and e["action"] == "create":
+            password = (e["raw"].get("password") or "").strip() or e["employee_id"]
+            user = User(employee_id=e["employee_id"], name=e["name"], email=e["email"],
+                        role=e["role"], bg=e["bg"] or None, department=e["department"] or None,
+                        job_title=e["job_title"] or None, password_hash=hash_password(password))
+            db.add(user)
+            db.flush()
+            created_map[e["employee_id"]] = user
+            created += 1
+
+    # Pass 2: apply field updates and resolve each manager.
     for e in entries:
         if not e["ok"]:
             continue
         note = f" ({proxy_note})" if proxy_note else ""
-        if e["action"] == "create":
-            mgr = resolve_employee(db, e["manager_ext"], "") if e["manager_ext"] else None
-            password = (e["raw"].get("password") or "").strip() or e["employee_id"]
-            db.add(User(employee_id=e["employee_id"], name=e["name"], email=e["email"],
-                        role=e["role"], bg=e["bg"] or None, department=e["department"] or None,
-                        job_title=e["job_title"] or None, manager_id=mgr.id if mgr else None,
-                        password_hash=hash_password(password)))
-            db.add(DataOpLog(op_type="IMPORT", entity="user", entity_ref=e["employee_id"],
-                             reason="batch user import: create" + note, created_by=actor.id))
-            created += 1
-        else:  # update
-            user = e["existing"]
-            for field, value in e["changes"].items():
-                if field == "manager":
-                    user.manager_id = value
-                else:
-                    setattr(user, field, value)
+        user = created_map.get(e["employee_id"]) or e["existing"]
+        changed_fields = [] if e["action"] == "create" else list(e["changes"].keys())
+        mgr_ext = e["manager_ext"]
+        proxied = False
+        if mgr_ext:
+            mgr = resolve_employee(db, mgr_ext, "") or created_map.get(mgr_ext)
+            if mgr is None:
+                mgr = _admin_fallback()
+                proxied = mgr is not None
+                if proxied:
+                    mgr_proxied += 1
+            if mgr is not None and mgr.id != user.manager_id:
+                user.manager_id = mgr.id
+                changed_fields.append("manager")
+        for field, value in e["changes"].items():
+            if field == "manager":
+                continue  # handled above via resolution
+            setattr(user, field, value)
+        if changed_fields:
             user.updated_at = utcnow()
-            db.add(DataOpLog(op_type="IMPORT", entity="user", entity_ref=e["employee_id"],
-                             reason="batch user import: update " + ", ".join(sorted(e["changes"])) + note,
-                             created_by=actor.id))
+        action_txt = "create" if e["action"] == "create" else "update " + ", ".join(sorted(changed_fields))
+        if proxied:
+            action_txt += " [manager missing → admin proxy]"
+        db.add(DataOpLog(op_type="IMPORT", entity="user", entity_ref=e["employee_id"],
+                         reason=f"batch user import: {action_txt}" + note, created_by=actor.id))
+        if e["action"] != "create":
             updated += 1
     db.commit()
     summary = user_summary(entries)

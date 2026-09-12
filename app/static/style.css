@@ -55,3 +55,9 @@ textarea { width: 100%; min-height: 160px; font-family: Consolas, monospace; }
   padding: 8px 20px; font-size: 14px; display: flex; gap: 12px; align-items: center; }
 .proxy-banner .btn { margin-left: auto; }
 .summary-counts { font-weight: 600; }
+.seal-bgs { display: flex; flex-direction: column; gap: 4px; }
+.bg-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; max-width: 520px; }
+.bg-check { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; margin: 0; cursor: pointer; }
+.bg-check.master { border-right: 1px solid var(--line); padding-right: 12px; }
+.batch-bar { margin-bottom: 6px; }

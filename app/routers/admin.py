@@ -20,7 +20,7 @@ from ..csvio import (_csv_rows_for_calc_template, actual_delete_template_rows, a
 from ..curves import parse_points
 from ..deps import SESSION_COOKIE, SESSION_MAX_AGE, get_db, home_for, make_session, require_roles
 from ..i18n import Translator, get_lang, invalidate_label_cache
-from ..models import Adjustment, BonusPlan, BonusResult, CalcRun, Curve, DataOpLog, Label, Lock, User
+from ..models import Adjustment, BonusPlan, BonusResult, CalcRun, Curve, DataOpLog, Label, Lock, User, utcnow
 from ..security import hash_password
 from ..ui import render
 from .auth import flash
@@ -118,6 +118,35 @@ def users_toggle(request: Request, uid: int, user=Depends(require_roles("ADMIN")
         target.is_active = not target.is_active
         db.commit()
     return flash("/admin/users", _t(request).t("msg_user_toggled"))
+
+
+@router.post("/users/batch-toggle")
+def users_batch_toggle(request: Request, uids: list[int] = Form(default=[]),
+                       action: str = Form("disable"),
+                       user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    t = _t(request)
+    want_active = action.strip().lower() != "disable"
+    changed = skipped = 0
+    for uid in uids:
+        target = db.get(User, uid)
+        if target is None or target.id == user.id:
+            skipped += 1
+            continue
+        if target.is_active == want_active:
+            skipped += 1
+            continue
+        target.is_active = want_active
+        target.updated_at = utcnow()
+        db.add(DataOpLog(op_type="UPDATE", entity="user", entity_ref=target.employee_id,
+                         reason="batch " + ("activate" if want_active else "deactivate"),
+                         created_by=user.id))
+        changed += 1
+    db.commit()
+    if changed == 0:
+        return flash("/admin/users", t.t("msg_users_batch_none"))
+    return flash("/admin/users", t.t("msg_users_batch_done",
+                                     n=changed, skipped=skipped,
+                                     state=t.t("active") if want_active else t.t("inactive")))
 
 
 # ---------- curves ----------
@@ -452,15 +481,28 @@ def adjust_execute(request: Request, csv_text: str = Form(...),
 # ---------- seals (locks) ----------
 
 @router.post("/locks")
-def add_lock(request: Request, period: str = Form(...), bg: str = Form(...),
+def add_lock(request: Request, period: str = Form(...), bgs: list[str] = Form(default=[]),
              user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
     t = _t(request)
-    exists = db.scalars(select(Lock).where(Lock.period == period, Lock.bg == bg)).first()
-    if exists:
-        return flash("/admin", t.t("msg_sealed_exists", period=period, bg=bg))
-    db.add(Lock(period=period.strip(), bg=bg.strip(), locked_by=user.id))
+    period = period.strip()
+    selected = []
+    for bg in bgs:
+        bg = bg.strip()
+        if bg and bg not in selected:
+            selected.append(bg)
+    if not selected:
+        return flash("/admin", t.t("msg_seal_no_bg"))
+    sealed, already = [], []
+    for bg in selected:
+        exists = db.scalars(select(Lock).where(Lock.period == period, Lock.bg == bg)).first()
+        if exists:
+            already.append(bg)
+            continue
+        db.add(Lock(period=period, bg=bg, locked_by=user.id))
+        sealed.append(bg)
     db.commit()
-    return flash("/admin", t.t("msg_sealed_done", period=period, bg=bg))
+    return flash("/admin", t.t("msg_sealed_multi", period=period,
+                               sealed=len(sealed), already=len(already)))
 
 
 # ---------- export (year + BG selectable) ----------
