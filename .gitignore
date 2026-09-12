@@ -62,6 +62,10 @@ data/
 *.sqlite3-journal
 *.db-journal
 
+# ---------- Business-continuity snapshots + trash fallback (contain full DB copies & key) ----------
+backups/
+.trash/
+
 # ---------- Local logs & personal notes ----------
 logs/
 server.log
