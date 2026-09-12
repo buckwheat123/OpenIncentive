@@ -747,91 +747,111 @@ def import_labels(db: Session, text: str, admin: User, lang: str = DEFAULT_LANG)
 
 # ---------------------------------------------------------------- export
 
-def export_results_rows(db: Session, bg: str | None = None, period: str | None = None,
-                        year: str | None = None, lang: str = DEFAULT_LANG) -> list[list]:
-    """Latest run per period; weighted rates only (no unweighted rate is provided).
+def _latest_results_by_period(db: Session, bg: str | None, period: str | None,
+                              year: str | None) -> list[tuple[str, "BonusResult"]]:
+    """Latest result per (employee, plan_name) across ALL runs of a period.
 
-    Each row carries the employee's total weighted payout rate for that run. If the
-    plan's KPI weights did not total 100% at calculation time, a comment is attached.
-    Filterable by BG, exact period or year.
+    Scans every run of the period oldest→newest so a later run wins, but a person who
+    was sealed (and therefore skipped by later recalculations) is still represented by
+    the run that last computed them. Returns (period, result) pairs sorted by period.
     """
     from .models import BonusResult, CalcRun
 
-    t = Translator(lang)
-    not_100_comment = t.t("weight_not_100_comment")
     periods = db.scalars(select(CalcRun.period).distinct()).all()
     if period:
         periods = [p for p in periods if p == period]
     if year:
         periods = [p for p in periods if p.split("-")[0] == year]
+
+    out: list[tuple[str, BonusResult]] = []
+    for p in sorted(periods):
+        runs = db.scalars(
+            select(CalcRun).where(CalcRun.period == p)
+            .order_by(CalcRun.created_at.asc(), CalcRun.id.asc())
+        ).all()
+        latest: dict[tuple[int, str], BonusResult] = {}
+        for run in runs:
+            for r in db.scalars(select(BonusResult).where(BonusResult.run_id == run.id)).all():
+                latest[(r.employee_id, r.plan_name)] = r
+        for (emp_id, plan_name), r in sorted(latest.items(), key=lambda kv: kv[0]):
+            if bg and r.employee.bg != bg:
+                continue
+            out.append((p, r))
+    return out
+
+
+def export_results_rows(db: Session, bg: str | None = None, period: str | None = None,
+                        year: str | None = None, lang: str = DEFAULT_LANG) -> list[list]:
+    """One row per (person, plan) for the latest calculation that covers it.
+
+    Weighted rates only (no unweighted rate is provided). Includes SEALED records —
+    they are flagged with a `sealed` column instead of being dropped. Each row carries
+    the employee's total weighted payout rate for that run; if the plan's KPI weights
+    did not total 100% at calculation time, a comment is attached. Filterable by BG,
+    exact period or year.
+    """
+    from .models import CalcRun
+
+    t = Translator(lang)
+    not_100_comment = t.t("weight_not_100_comment")
     header = ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
               "weighted_rate_pct", "weight_total_pct", "adjustment_pct", "final_rate_pct",
-              "adjusted", "comment", "calculated_at"]
+              "adjusted", "sealed", "comment", "calculated_at"]
     rows = [header]
-    for p in sorted(periods):
+    for p, r in _latest_results_by_period(db, bg, period, year):
+        emp = r.employee
+        weight_total = r.weight_total_pct
+        comment = "" if abs(weight_total - 100.0) < 1e-6 else not_100_comment
+        sealed = "Y" if is_locked(db, p, emp.bg) else ""
         run = db.scalars(
-            select(CalcRun).where(CalcRun.period == p).order_by(CalcRun.created_at.desc(), CalcRun.id.desc())
+            select(CalcRun).where(CalcRun.period == p, CalcRun.id == r.run_id)
         ).first()
-        if not run:
-            continue
-        for r in db.scalars(select(BonusResult).where(BonusResult.run_id == run.id)).all():
-            emp = r.employee
-            if bg and emp.bg != bg:
-                continue
-            weight_total = r.weight_total_pct
-            comment = "" if abs(weight_total - 100.0) < 1e-6 else not_100_comment
-            rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
-                         emp.job_title or "", r.plan_name,
-                         f"{r.weighted_rate_pct:.2f}", fmt_num(weight_total),
-                         f"{r.adjustment_pct:.2f}", f"{r.final_rate_pct:.2f}",
-                         "Y" if r.adjusted else "", comment,
-                         run.created_at.strftime("%Y-%m-%d %H:%M")])
+        calculated_at = run.created_at.strftime("%Y-%m-%d %H:%M") if run else ""
+        rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
+                     emp.job_title or "", r.plan_name,
+                     f"{r.weighted_rate_pct:.2f}", fmt_num(weight_total),
+                     f"{r.adjustment_pct:.2f}", f"{r.final_rate_pct:.2f}",
+                     "Y" if r.adjusted else "", sealed, comment, calculated_at])
     return rows
 
 
 def export_kpi_rows(db: Session, bg: str | None = None, period: str | None = None,
                     year: str | None = None, lang: str = DEFAULT_LANG) -> list[list]:
-    """Per-KPI detail of the latest run per period: one row per employee/plan/KPI.
+    """Per-KPI detail of the latest calculation covering each (person, plan).
 
     Companion to export_results_rows (which gives one total-rate row per plan).
-    Exploded from BonusResult.detail_json captured at calculation time. Filterable
-    by BG, exact period or year.
+    Exploded from BonusResult.detail_json captured at calculation time. Sealed records
+    are included and flagged with a `sealed` column. Filterable by BG, period or year.
     """
-    from .models import BonusResult, CalcRun
+    from .models import CalcRun
 
-    periods = db.scalars(select(CalcRun.period).distinct()).all()
-    if period:
-        periods = [p for p in periods if p == period]
-    if year:
-        periods = [p for p in periods if p.split("-")[0] == year]
     header = ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
               "kpi_name", "target", "actual", "curve_name", "weight_pct",
-              "attainment_pct", "rate_pct", "calculated_at"]
+              "attainment_pct", "rate_pct", "weighted_contribution_pct", "sealed", "calculated_at"]
     rows = [header]
-    for p in sorted(periods):
+    for p, r in _latest_results_by_period(db, bg, period, year):
+        emp = r.employee
+        sealed = "Y" if is_locked(db, p, emp.bg) else ""
         run = db.scalars(
-            select(CalcRun).where(CalcRun.period == p).order_by(CalcRun.created_at.desc(), CalcRun.id.desc())
+            select(CalcRun).where(CalcRun.period == p, CalcRun.id == r.run_id)
         ).first()
-        if not run:
-            continue
-        for r in db.scalars(select(BonusResult).where(BonusResult.run_id == run.id)).all():
-            emp = r.employee
-            if bg and emp.bg != bg:
-                continue
-            calculated_at = run.created_at.strftime("%Y-%m-%d %H:%M")
-            try:
-                detail = json.loads(r.detail_json) if r.detail_json else []
-            except (ValueError, TypeError):
-                detail = []
-            for d in detail:
-                actual = d.get("actual")
-                rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
-                             emp.job_title or "", r.plan_name,
-                             d.get("kpi", ""), fmt_num(d.get("quota")),
-                             "" if actual is None else fmt_num(actual),
-                             d.get("curve", ""), fmt_num(d.get("weight_pct")),
-                             fmt_num(d.get("attainment_pct")), fmt_num(d.get("rate_pct")),
-                             calculated_at])
+        calculated_at = run.created_at.strftime("%Y-%m-%d %H:%M") if run else ""
+        try:
+            detail = json.loads(r.detail_json) if r.detail_json else []
+        except (ValueError, TypeError):
+            detail = []
+        for d in detail:
+            actual = d.get("actual")
+            rate = d.get("rate_pct") or 0.0
+            weight = d.get("weight_pct") or 0.0
+            contribution = round(weight / 100.0 * rate, 4)  # this KPI's weighted contribution
+            rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
+                         emp.job_title or "", r.plan_name,
+                         d.get("kpi", ""), fmt_num(d.get("quota")),
+                         "" if actual is None else fmt_num(actual),
+                         d.get("curve", ""), fmt_num(weight),
+                         fmt_num(d.get("attainment_pct")), fmt_num(rate), fmt_num(contribution),
+                         sealed, calculated_at])
     return rows
 
 
