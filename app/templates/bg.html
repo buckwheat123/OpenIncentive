@@ -11,7 +11,7 @@
     </div>
     <a class="btn secondary" href="/bg/export.csv">{{ t('download_bg_history') }}</a>
     <a class="btn secondary" href="/bg/export_kpi.csv">{{ t('download_bg_kpi_history') }}</a>
-    {% if user.role == 'BG_ADMIN' %}
+    {% if user.role in ('BG_ADMIN', 'ADMIN') %}
     <a class="btn" href="/letters/compose">{{ t('send_letter') }}</a>
     <a class="btn secondary" href="/letters">{{ t('letter_log') }}</a>
     {% endif %}

@@ -288,6 +288,38 @@ def main():
         assert db.query(Letter).filter_by(id=letter.id).first().read_at is not None
         print("[16] letter with curve slope table + single ack + recipient-only read OK")
 
+        # ---- #10 letters overhaul: Plan_Table vs Performance_Table split,
+        #      expanded placeholders, Global ADMIN templates ----
+        assert "实绩" not in letter.body_html.split("达成情况")[0] \
+               if "达成情况" in letter.body_html else True   # Plan_Table part is pure structure
+        assert "加权贡献" in letter.body_html and "原始支付率" in letter.body_html
+        assert "E2E 测试留言" in letter.body_html and "经理" in letter.body_html
+        # placeholder rendering: manager name should appear via {{MANAGER}}
+        db.expire_all()
+        mgr = e002.manager
+        assert mgr and mgr.name in letter.body_html
+        # BG_ADMIN sees the platform's Global template and can reuse it,
+        # but cannot overwrite the original.
+        login(c, "BGA1", "BGA1")
+        tpl_page = c.get(f"{BASE}/letters/templates").text
+        assert "集团统一奖金通知（Global）" in tpl_page
+        global_tpl = db.query(LetterTemplate).filter_by(bg="Global").first()
+        compose_page = c.get(f"{BASE}/letters/compose").text
+        assert global_tpl.name in compose_page
+        denied = c.post(f"{BASE}/letters/templates/save", data={
+            "tid": global_tpl.id, "name": "hijack", "subject": "x", "body_html": "<p>x</p>"},
+            follow_redirects=False)
+        assert denied.status_code == 303 and "/letters/templates" in denied.headers.get("location", "")
+        # save-as-new from a Global template is allowed and lands in BGA1's primary BG
+        r = c.post(f"{BASE}/letters/templates/save", data={
+            "tid": global_tpl.id, "name": "BGA1 copy", "subject": "hi",
+            "body_html": "<p>{{NAME}}</p>", "save_as_new": "true"})
+        assert "已保存" in r.text
+        db.expire_all()
+        copy = db.query(LetterTemplate).filter_by(name="BGA1 copy").first()
+        assert copy and copy.bg == "Retail"
+        print("[16b] letters #10 (plan/perf split, expanded placeholders, Global templates) OK")
+
         # ---- template save-as-new ----
         r = c.post(f"{BASE}/letters/templates/save", data={
             "tid": tpl.id, "name": "季度奖金通知 v2", "subject": "测试主题",
@@ -297,6 +329,7 @@ def main():
         print("[17] template save-as-new OK")
 
         # ---- language management: labels page, CSV upsert ----
+        login(c, "ADMIN1", "admin123")
         labels_page = c.get(f"{BASE}/admin/labels").text
         assert "语言管理" in labels_page and "华东销售部" in labels_page
         labels_csv = "original,zh,en\nTestTerm,测试词,TestTerm"

@@ -38,34 +38,84 @@ def _scope_bg(user: User) -> set[str] | None:
     return bg_filter(user)
 
 
+GLOBAL_BG = "Global"
+
+
+def _template_scope_clause(user: User):
+    """SQLAlchemy predicate: which LetterTemplate rows this actor may view.
+    ADMIN sees all; BG_ADMIN sees their managed BGs plus the platform-wide
+    Global templates authored by ADMIN (feature #10)."""
+    scope = _scope_bg(user)
+    if scope is None:
+        return None  # no filter
+    wanted = list(scope) + [GLOBAL_BG]
+    return LetterTemplate.bg.in_(wanted)
+
+
+def _can_view_template(user: User, template: LetterTemplate) -> bool:
+    scope = _scope_bg(user)
+    return scope is None or template.bg in scope or template.bg == GLOBAL_BG
+
+
+def _can_edit_template(user: User, template: LetterTemplate) -> bool:
+    scope = _scope_bg(user)
+    return scope is None or template.bg in scope
+
+
 # ---------- placeholders rendering ----------
 
 def build_plan_table(db, recipient: User, period: str, tr: Translator) -> str:
+    """Plan structure only (feature #10): no actuals, no rates — the letter's
+    'your plan for this quarter' block. Performance numbers live in
+    build_performance_table()."""
     plan = plan_for(db, recipient.id, period)
     if not plan:
         return f"<p>{period}: {tr.t('no_plans_year')}</p>"
+    rows = ""
+    for kpi in plan.kpis:
+        rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{kpi.weight_pct:g}%</td>"
+                 f"<td>{kpi.quota:,.2f}</td><td>{tr.tl(kpi.curve.name)}</td></tr>")
+    return (f"<table {TABLE_STYLE}>"
+            f"<tr><th>KPI</th><th>{tr.t('weight_col')}</th><th>{tr.t('target')}</th>"
+            f"<th>{tr.t('curve_col')}</th></tr>{rows}</table>")
+
+
+def build_performance_table(db, recipient: User, period: str, tr: Translator) -> str:
+    """Per-KPI performance breakdown (feature #10): weight / target / actual /
+    attainment / curve / raw payout rate / weighted contribution. Weighted
+    contribution = weight% / 100 * raw rate, matching the platform's locked
+    weighted-rate convention (Σ contribution, no renormalisation)."""
+    plan = plan_for(db, recipient.id, period)
+    if not plan:
+        return ""
     result = result_for(db, recipient.id, period, plan.plan_name)
     detail = {d["kpi"]: d for d in (json.loads(result.detail_json) if result else [])}
     rows = ""
+    total_contrib = 0.0
     for kpi in plan.kpis:
         d = detail.get(kpi.kpi_name)
         if d and d.get("actual") is not None:
-            actual, attain, rate = f"{d['actual']:,.2f}", f"{d['attainment_pct']:.1f}%", f"{d['rate_pct']:.1f}%"
+            actual = f"{d['actual']:,.2f}"
+            attain = f"{d['attainment_pct']:.1f}%"
+            raw = d["rate_pct"]
+            contrib = kpi.weight_pct / 100.0 * raw
+            total_contrib += contrib
+            raw_s, contrib_s = f"{raw:.1f}%", f"{contrib:.2f}%"
         else:
-            actual, attain, rate = "-", "-", "-"
-        rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{kpi.quota:,.2f}</td><td>{actual}</td>"
-                 f"<td>{attain}</td><td>{tr.tl(kpi.curve.name)}</td><td>{kpi.weight_pct:g}%</td>"
-                 f"<td>{rate}</td></tr>")
+            actual, attain, raw_s, contrib_s = "-", "-", "-", "-"
+        rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{kpi.weight_pct:g}%</td>"
+                 f"<td>{kpi.quota:,.2f}</td><td>{actual}</td><td>{attain}</td>"
+                 f"<td>{tr.tl(kpi.curve.name)}</td><td>{raw_s}</td><td>{contrib_s}</td></tr>")
     summary = ""
     if result:
         adj = (f"　{tr.t('special_adjust')}：{result.adjustment_pct:+.2f} pp" if result.adjusted else "")
         summary = (f"<p><strong>{tr.t('weighted_rate')}：{result.weighted_rate_pct:.2f}%{adj}　"
                    f"{tr.t('quarter_total_rate')}：{result.final_rate_pct:.2f}%</strong></p>")
     return (f"<table {TABLE_STYLE}>"
-            f"<tr><th>KPI</th><th>{tr.t('target')}</th><th>{tr.t('actual_col')}</th>"
-            f"<th>{tr.t('attainment')}</th><th>Curve</th><th>{tr.t('weight_col')}</th>"
-            f"<th>{tr.t('payout_rate')}</th></tr>"
-            f"{rows}</table>{summary}")
+            f"<tr><th>KPI</th><th>{tr.t('weight_col')}</th><th>{tr.t('target')}</th>"
+            f"<th>{tr.t('actual_col')}</th><th>{tr.t('attainment')}</th>"
+            f"<th>{tr.t('curve_col')}</th><th>{tr.t('raw_rate')}</th>"
+            f"<th>{tr.t('weighted_contribution')}</th></tr>{rows}</table>{summary}")
 
 
 def build_curve_summary(db, recipient: User, period: str, tr: Translator) -> str:
@@ -100,13 +150,23 @@ def build_curve_summary(db, recipient: User, period: str, tr: Translator) -> str
 def render_letter_body(db, template: LetterTemplate, recipient: User, period: str,
                        message: str, token: str, tr: Translator) -> str:
     body = template.body_html
-    for key, value in {
+    plan = plan_for(db, recipient.id, period)
+    substitutions = {
         "{{NAME}}": recipient.name,
+        "{{EMPLOYEE_ID}}": recipient.employee_id,
+        "{{EMAIL}}": recipient.email or "",
+        "{{BG}}": tr.tl(recipient.bg) if recipient.bg else "",
+        "{{DEPARTMENT}}": tr.tl(recipient.department) if recipient.department else "",
+        "{{JOB_TITLE}}": tr.tl(recipient.job_title) if recipient.job_title else "",
+        "{{MANAGER}}": recipient.manager.name if recipient.manager else "",
         "{{PERIOD}}": period,
-        "{{PLAN_TABLE}}": build_plan_table(db, recipient, period, tr),
-        "{{CURVE_SUMMARY}}": build_curve_summary(db, recipient, period, tr),
+        "{{PLAN_NAME}}": (tr.tl(plan.plan_name) if plan else ""),
         "{{MESSAGE}}": message or "",
-    }.items():
+        "{{PLAN_TABLE}}": build_plan_table(db, recipient, period, tr),
+        "{{PERFORMANCE_TABLE}}": build_performance_table(db, recipient, period, tr),
+        "{{CURVE_SUMMARY}}": build_curve_summary(db, recipient, period, tr),
+    }
+    for key, value in substitutions.items():
         body = body.replace(key, value)
     ack_url = f"{BASE_URL}/letter/{token}"
     body += (f'<hr><p style="color:#888;font-size:12px">{tr.t("letter_ack_line")}'
@@ -208,9 +268,9 @@ def templates_list(request: Request, user: User = Depends(require_user), db=Depe
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
     stmt = select(LetterTemplate).order_by(LetterTemplate.updated_at.desc())
-    scope = _scope_bg(user)
-    if scope is not None:
-        stmt = stmt.where(LetterTemplate.bg.in_(scope if scope else ["__none__"]))
+    clause = _template_scope_clause(user)
+    if clause is not None:
+        stmt = stmt.where(clause)
     return render(request, "letters/templates.html", user=user, templates=db.scalars(stmt).all())
 
 
@@ -224,8 +284,7 @@ def template_new(request: Request, user: User = Depends(require_user)):
 @router.get("/letters/templates/{tid}/edit")
 def template_edit(tid: int, request: Request, user: User = Depends(require_user), db=Depends(get_db)):
     template = db.get(LetterTemplate, tid)
-    scope = _scope_bg(user)
-    if not _allowed(user) or not template or (scope is not None and template.bg not in scope):
+    if not _allowed(user) or not template or not _can_view_template(user, template):
         return flash("/letters/templates", Translator(get_lang(request)).t("no_permission"))
     return render(request, "letters/template_edit.html", user=user, template=template)
 
@@ -237,9 +296,8 @@ def template_save(request: Request, tid: int = Form(0), name: str = Form(...), s
     t = Translator(get_lang(request))
     if not _allowed(user):
         return flash("/", t.t("no_permission"))
-    scope = _scope_bg(user)
     template = db.get(LetterTemplate, tid) if tid else None
-    if template and scope is not None and template.bg not in scope:
+    if template and save_as_new != "true" and not _can_edit_template(user, template):
         return flash("/letters/templates", t.t("no_permission"))
     if save_as_new == "true" or not template:
         template = LetterTemplate(bg=user.bg or "Global", created_by=user.id)
@@ -257,8 +315,9 @@ def compose(request: Request, user: User = Depends(require_user), db=Depends(get
         return flash("/", Translator(get_lang(request)).t("no_permission"))
     scope = _scope_bg(user)
     tmpl_stmt = select(LetterTemplate).order_by(LetterTemplate.name)
-    if scope is not None:
-        tmpl_stmt = tmpl_stmt.where(LetterTemplate.bg.in_(scope if scope else ["__none__"]))
+    clause = _template_scope_clause(user)
+    if clause is not None:
+        tmpl_stmt = tmpl_stmt.where(clause)
     templates = db.scalars(tmpl_stmt).all()
     members_stmt = select(User).where(User.role != "ADMIN")
     if scope is not None:

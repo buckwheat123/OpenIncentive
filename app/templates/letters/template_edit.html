@@ -12,11 +12,13 @@
     <label>{{ t('letter_body') }}</label>
     <textarea name="body_html">{% if template %}{{ template.body_html }}{% else %}{% raw %}<p>{{NAME}}，你好：</p>
 <p>{{MESSAGE}}</p>
-<p>以下是你 {{PERIOD}} 的奖金计划与结果：</p>
+<p>以下是你 {{PERIOD}} 的奖金计划：</p>
 {{PLAN_TABLE}}
+<p>你的达成情况与支付率：</p>
+{{PERFORMANCE_TABLE}}
 <p>所用支付 Curve（达成率 → 支付率，含区间斜率）：</p>
 {{CURVE_SUMMARY}}
-<p>如有疑问，请与你的经理或 BG 管理员联系。</p>{% endraw %}{% endif %}</textarea>
+<p>如有疑问，请与你的经理 {{MANAGER}} 或 BG 管理员联系。</p>{% endraw %}{% endif %}</textarea>
     <p>
       <button class="btn" type="submit" name="save_as_new" value="">{{ t('save') }}</button>
       {% if template %}<button class="btn secondary" type="submit" name="save_as_new" value="true">{{ t('save_as_new') }}</button>{% endif %}

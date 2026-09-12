@@ -3,7 +3,7 @@
 {% block content %}
 <div class="card">
   <h2 style="margin-top:0">{{ t('letter_log') }}
-    {% if user.role == 'BG_ADMIN' %}<a class="btn small" style="float:right" href="/letters/compose">{{ t('compose_letter') }}</a>{% endif %}
+    {% if user.role in ('BG_ADMIN','ADMIN') %}<a class="btn small" style="float:right" href="/letters/compose">{{ t('compose_letter') }}</a>{% endif %}
   </h2>
   <table>
     <tr><th>{{ t('recipient') }}</th><th>{{ t('period') }}</th><th>{{ t('letter_subject') }}</th><th>{{ t('template') }}</th>

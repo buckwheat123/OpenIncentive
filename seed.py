@@ -81,11 +81,13 @@ CS_QUOTA = 90
 
 TEMPLATE_BODY = """<p>{{NAME}}，你好：</p>
 <p>{{MESSAGE}}</p>
-<p>以下是你 {{PERIOD}} 的奖金计划与结果：</p>
+<p>以下是你 {{PERIOD}} 的奖金计划：</p>
 {{PLAN_TABLE}}
+<p>你的达成情况与支付率：</p>
+{{PERFORMANCE_TABLE}}
 <p>所用支付 Curve（达成率 → 支付率，含区间斜率）：</p>
 {{CURVE_SUMMARY}}
-<p>如有疑问，请与你的经理或 BG 管理员联系。</p>"""
+<p>如有疑问，请与你的经理 {{MANAGER}} 或 BG 管理员联系。</p>"""
 
 
 def _add_plan(db, period, emp, plan_name, kpis, version=1):
@@ -178,6 +180,10 @@ def main():
     template = LetterTemplate(name="季度奖金通知", bg="Retail", subject="2026-Q3 奖金结果通知",
                               body_html=TEMPLATE_BODY, created_by=users["BGA1"].id)
     db.add(template)
+    global_tpl = LetterTemplate(name="集团统一奖金通知（Global）", bg="Global",
+                                subject="{{PERIOD}} 奖金通知",
+                                body_html=TEMPLATE_BODY, created_by=users["ADMIN1"].id)
+    db.add(global_tpl)
     db.commit()
     token = secrets.token_urlsafe(16)
     body = render_letter_body(db, template, users["E001"], "2026-Q3", "感谢本季度的出色表现！",
