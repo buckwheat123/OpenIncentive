@@ -12,8 +12,9 @@ from fastapi import APIRouter, Depends, Form, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import select
 
-from ..csvio import (big_error_rows, big_summary, big_template_rows, decode_csv, execute_big_import,
-                     parse_big_rows, recent_periods, to_csv)
+from ..csvio import (big_summary, decode_csv, execute_year_letter_import,
+                     parse_year_letter_rows, recent_years, to_csv,
+                     year_letter_error_rows, year_letter_template_rows)
 from ..deps import bg_filter, current_user, get_db, require_user, session_payload
 from ..i18n import Translator, get_lang
 from ..mailer import send_mail
@@ -203,17 +204,16 @@ def _csv_response(rows: list[list], filename: str) -> Response:
 def letter_data_page(request: Request, user: User = Depends(require_user), db=Depends(get_db)):
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
-    return render(request, "letters/data.html", user=user, periods=recent_periods(db))
+    return render(request, "letters/data.html", user=user, years=recent_years(db))
 
 
 @router.get("/letters/data/template.csv")
-def letter_data_template(request: Request, period: str = "",
+def letter_data_template(request: Request, year: str = "",
                          user: User = Depends(require_user), db=Depends(get_db)):
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
-    rows = big_template_rows(db, period=period.strip() or None, bg=_scope_bg(user),
-                             with_actual=False)
-    name = f"letter_data_template{'_' + period.strip() if period.strip() else ''}.csv"
+    rows = year_letter_template_rows(db, year=year.strip() or None, bg=_scope_bg(user))
+    name = f"letter_data_template{'_' + year.strip() if year.strip() else ''}.csv"
     return _csv_response(rows, name)
 
 
@@ -226,7 +226,7 @@ async def letter_data_preview(request: Request, file: UploadFile | None = None,
     if file is None or not file.filename:
         return flash("/letters/data", t.t("msg_no_file"))
     text = decode_csv(await file.read())
-    entries = parse_big_rows(db, text, user, get_lang(request), with_actual=False)
+    entries = parse_year_letter_rows(db, text, user, get_lang(request))
     if not entries:
         return flash("/letters/data", t.t("msg_no_rows"))
     return render(request, "import_preview.html", user=user, rows=entries, csv_text=text,
@@ -247,8 +247,8 @@ def letter_data_execute(request: Request, csv_text: str = Form(...),
         original = db.get(User, payload["p"])
         if original:
             proxy_note = f"proxy by {original.employee_id}"
-    msg = execute_big_import(db, csv_text, user, get_lang(request), with_actual=False,
-                             proxy_note=proxy_note)
+    msg = execute_year_letter_import(db, csv_text, user, get_lang(request),
+                                     proxy_note=proxy_note)
     return flash("/letters/data", msg)
 
 
@@ -257,7 +257,7 @@ def letter_data_errors(request: Request, csv_text: str = Form(...),
                        user: User = Depends(require_user), db=Depends(get_db)):
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
-    rows = big_error_rows(db, csv_text, user, get_lang(request), with_actual=False)
+    rows = year_letter_error_rows(db, csv_text, user, get_lang(request))
     return _csv_response(rows, "letter_data_errors.csv")
 
 

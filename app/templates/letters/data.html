@@ -6,11 +6,11 @@
   <p class="muted">{{ t('letter_data_note') }}</p>
 
   <h4>{{ t('template_download') }}</h4>
-  <p class="muted">{{ t('prefill_hint') }}</p>
+  <p class="muted">{{ t('year_prefill_hint') }}</p>
   <form method="get" action="/letters/data/template.csv" class="inline">
-    <select name="period">
+    <select name="year">
       <option value="">{{ t('blank_template') }}</option>
-      {% for p in periods %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+      {% for y in years %}<option value="{{ y }}">{{ y }}</option>{% endfor %}
     </select>
     <button class="btn" type="submit">{{ t('download') }}</button>
   </form>

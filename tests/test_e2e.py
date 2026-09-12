@@ -61,6 +61,17 @@ BG_SCOPE_CSV = "\n".join([
     "2027-Q3,E900,周敏,zhou.min@example.com,HR,People,HRBP,M900,EMPLOYEE,Sales Incentive,Revenue,60,800000,Standard Curve,700000",
 ]) + "\n"
 
+# Year-format letter-data sheet (feature #10 / Batch E2a): one row per KPI with four
+# YTD target columns. E003 fills only Q1 and Q3 of 2028 → the importer expands this into
+# two per-quarter plans (2028-Q1, 2028-Q3) and skips the blank Q2/Q4.
+YEAR_HEADER = ("year,employee_id,name,email,bg,department,job_title,manager_id,role,"
+               "plan_name,kpi_name,weight_pct,curve_name,ytd_q1,ytd_q2,ytd_q3,ytd_q4")
+YEAR_LETTER_CSV = "\n".join([
+    YEAR_HEADER,
+    "2028,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,"
+    "Sales Incentive,Revenue,60,Standard Curve,1000000,,1400000,",
+]) + "\n"
+
 
 def login(client: httpx.Client, uid: str, pw: str):
     r = client.post(f"{BASE}/login", data={"login_id": uid, "password": pw}, follow_redirects=True)
@@ -217,6 +228,29 @@ def main():
         no_actual = db.query(Actual).filter_by(period="2027-Q2", employee_id=e003.id).first()
         assert no_actual is None                            # letter data carries no actuals
         print("[13] letter-data import (separate screen, no actual) OK")
+
+        # ---- year-format letter-data import (feature #10 / Batch E2a) ----
+        yt = c.get(f"{BASE}/letters/data/template.csv").text.lstrip("\ufeff")
+        assert "ytd_q1" in yt and "ytd_q4" in yt and yt.splitlines()[0].startswith("year")
+        ypre = c.get(f"{BASE}/letters/data/template.csv?year=2026").text   # real prefill
+        assert "E001" in ypre and "ytd_q" in ypre            # 2026 plans laid out by year
+        yr = upload(c, f"{BASE}/letters/data/preview", YEAR_LETTER_CSV)
+        assert "预览校验结果" in yr.text and "可导入" in yr.text, yr.text[:600]
+        # one year row expands into two quarterly rows (2028-Q1 + 2028-Q3)
+        assert yr.text.count("2028-Q1") >= 1 and yr.text.count("2028-Q3") >= 1
+        assert "2028-Q2" not in yr.text and "2028-Q4" not in yr.text   # blank quarters skipped
+        yr_ex = c.post(f"{BASE}/letters/data/execute", data={"csv_text": YEAR_LETTER_CSV})
+        assert "计划新版本 2 个" in yr_ex.text, yr_ex.text[:600]
+        db.expire_all()
+        e003 = db.query(User).filter_by(employee_id="E003").first()
+        q1 = db.query(BonusPlan).filter_by(period="2028-Q1", employee_id=e003.id,
+                                           plan_name="Sales Incentive", is_current=True).first()
+        q3 = db.query(BonusPlan).filter_by(period="2028-Q3", employee_id=e003.id,
+                                           plan_name="Sales Incentive", is_current=True).first()
+        assert q1 and q1.kpis[0].quota == 1000000
+        assert q3 and q3.kpis[0].quota == 1400000
+        assert db.query(BonusPlan).filter_by(period="2028-Q2", employee_id=e003.id).first() is None
+        print("[13b] year-format letter-data import (YTD cols → quarterly plans) OK")
 
         # ---- BG admin #4: multi-BG scope (BGA1 manages Retail + Commercial) ----
         login(c, "BGA1", "BGA1")

@@ -415,6 +415,177 @@ def big_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
     return rows
 
 
+# ---------------------------------------------------------------- year-based letter-data import
+#
+# Feature #10: the letter-data sheet uses a YEAR-shaped template — one row per
+# (year, employee, plan, KPI) carrying FOUR YTD quota columns (ytd_q1..ytd_q4).
+# Internally we expand each row into up to four big-table rows (period =
+# f"{year}-Q{n}", quota = ytd_qn) so the existing big-table parser, latest-wins
+# logic and versioned BonusPlan upsert all apply unchanged. Empty ytd_qN cells
+# are skipped (no plan is created for that quarter).
+
+YEAR_HEADER = ["year", "employee_id", "name", "email", "bg", "department", "job_title",
+               "manager_id", "role", "plan_name", "kpi_name", "weight_pct", "curve_name",
+               "ytd_q1", "ytd_q2", "ytd_q3", "ytd_q4"]
+QUARTER_SUFFIXES = ["Q1", "Q2", "Q3", "Q4"]
+
+
+def recent_years(db: Session, n: int = 3) -> list[str]:
+    """Distinct years that have any BonusPlan/Actual data, most recent first."""
+    periods = set(db.scalars(select(BonusPlan.period).distinct()).all())
+    periods |= set(db.scalars(select(Actual.period).distinct()).all())
+    years = sorted({p.split("-")[0] for p in periods if "-" in p}, reverse=True)
+    return years[:n]
+
+
+def year_to_big_text(text: str) -> str:
+    """Expand a year-shaped letter-data CSV into the (period-keyed) big-table
+    format that parse_big_rows / execute_big_import already understand. Non-year
+    headers pass through unchanged so callers can feed either flavor."""
+    rows = _rows(text)
+    if not rows:
+        return text
+    first = next(iter(rows[0].keys()), "")
+    # Already big-shaped? Leave untouched.
+    if "period" in rows[0] and "year" not in rows[0]:
+        return text
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(big_header(False))   # same columns as LETTER_DATA_HEADER
+    for row in rows:
+        year = (row.get("year") or "").strip()
+        if not year:
+            continue
+        base = [
+            year,                                                    # period slot
+            (row.get("employee_id") or "").strip(),
+            (row.get("name") or "").strip(),
+            (row.get("email") or "").strip(),
+            (row.get("bg") or "").strip(),
+            (row.get("department") or "").strip(),
+            (row.get("job_title") or "").strip(),
+            (row.get("manager_id") or "").strip(),
+            (row.get("role") or "").strip(),
+            (row.get("plan_name") or "").strip(),
+            (row.get("kpi_name") or "").strip(),
+            (row.get("weight_pct") or "").strip(),
+            "",                                                       # quota filled per quarter below
+            (row.get("curve_name") or "").strip(),
+        ]
+        for qi, q in enumerate(QUARTER_SUFFIXES):
+            quota = (row.get(f"ytd_q{qi+1}") or "").strip()
+            if quota == "":
+                continue
+            r = list(base)
+            r[0] = f"{year}-{q}"
+            r[12] = quota
+            writer.writerow(r)
+    return out.getvalue()
+
+
+def year_letter_template_rows(db: Session, year: str | None = None,
+                              bg=None) -> list[list]:
+    """Prefill a year-form sheet from existing per-quarter BonusPlans: group by
+    (year, employee, plan_name, kpi_name) and lay the four YTD quotas side by side.
+    Weight / curve come from the latest current plan version."""
+    rows = [YEAR_HEADER[:]]
+    if not year:
+        return rows
+    stmt = select(BonusPlan).where(BonusPlan.period.like(f"{year}-%"),
+                                   BonusPlan.is_current == True,  # noqa: E712
+                                   BonusPlan.is_deleted == False)  # noqa: E712
+    plans = db.scalars(stmt).all()
+    grouped: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    for p in plans:
+        emp = db.get(User, p.employee_id)
+        if not emp or not _bg_in(emp.bg, bg):
+            continue
+        try:
+            qi = QUARTER_SUFFIXES.index(p.period.split("-")[1])
+        except (ValueError, IndexError):
+            continue
+        for kpi in p.kpis:
+            key = (year, emp.employee_id, p.plan_name, kpi.kpi_name)
+            if key not in grouped:
+                grouped[key] = {
+                    "emp": emp, "plan_name": p.plan_name, "kpi_name": kpi.kpi_name,
+                    "weight": kpi.weight_pct, "curve": kpi.curve.name if kpi.curve else "",
+                    "ytd": ["", "", "", ""],
+                }
+                order.append(key)
+            g = grouped[key]
+            g["ytd"][qi] = fmt_num(kpi.quota)
+            g["weight"] = kpi.weight_pct
+            g["curve"] = kpi.curve.name if kpi.curve else ""
+    for key in order:
+        g = grouped[key]
+        emp = g["emp"]
+        mgr = db.get(User, emp.manager_id) if emp.manager_id else None
+        rows.append([
+            year, emp.employee_id, emp.name, emp.email or "", emp.bg or "",
+            emp.department or "", emp.job_title or "",
+            mgr.employee_id if mgr else "", emp.role or "",
+            g["plan_name"], g["kpi_name"], fmt_num(g["weight"]), g["curve"],
+            *g["ytd"],
+        ])
+    return rows
+
+
+def parse_year_letter_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG) -> list[dict]:
+    """Parse a year-form sheet by first expanding it into the big-table format, then
+    delegating to parse_big_rows. This keeps the error vocabulary (BG scope, curve,
+    required, latest-wins) identical between the two letter/calculation sheets."""
+    return parse_big_rows(db, year_to_big_text(text), actor, lang, with_actual=False)
+
+
+def execute_year_letter_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
+                               proxy_note: str = "") -> str:
+    return execute_big_import(db, year_to_big_text(text), actor, lang, with_actual=False,
+                              proxy_note=proxy_note)
+
+
+def year_letter_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG) -> list[list]:
+    """Error-list CSV keyed by the ORIGINAL year-form row so the user can fix and
+    re-upload the same sheet they sent us. Big-table errors (from the expanded
+    view) are mapped back to (year, employee, plan, kpi)."""
+    expanded = year_to_big_text(text)
+    entries = parse_big_rows(db, expanded, actor, lang, with_actual=False)
+    header = YEAR_HEADER + ["status", "note"]
+    rows = [header]
+    original_year_rows = _rows(text)
+    # Group big-table entries by (year, employee, plan, kpi) so a single year row
+    # can carry a merged error/warning string.
+    grouped: dict[tuple, list[dict]] = {}
+    for e in entries:
+        if e["ok"] or e["ignored"]:
+            continue
+        raw = e["raw"]
+        year = (raw.get("period") or "").split("-")[0]
+        key = (year, raw.get("employee_id") or "", raw.get("plan_name") or "", raw.get("kpi_name") or "")
+        grouped.setdefault(key, []).append(e)
+    for orow in original_year_rows:
+        year = (orow.get("year") or "").strip()
+        if not year:
+            continue
+        key = (year, (orow.get("employee_id") or "").strip(),
+               (orow.get("plan_name") or "").strip(), (orow.get("kpi_name") or "").strip())
+        errs = grouped.get(key)
+        if not errs:
+            continue
+        seen = set()
+        merged_status, merged_note = [], []
+        for e in errs:
+            if e["status"] not in seen:
+                merged_status.append(e["status"])
+                seen.add(e["status"])
+            if e["note"] and e["note"] not in merged_note:
+                merged_note.append(e["note"])
+        out = [orow.get(h, "") or "" for h in YEAR_HEADER]
+        rows.append(out + [" / ".join(merged_status), "; ".join(merged_note)])
+    return rows
+
+
 # ---------------------------------------------------------------- batch user import (ADMIN only)
 #
 # A dedicated roster sheet for user management. Idempotent upsert semantics:

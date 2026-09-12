@@ -94,3 +94,7 @@ $RECYCLE.BIN/
 .AppleDouble
 .LSOverride
 ._*
+
+# LibreOffice/Excel temp lock files
+.~*
+*~lock*
