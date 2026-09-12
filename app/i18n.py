@@ -404,6 +404,19 @@ STRINGS: dict[str, tuple[str, str]] = {
     "msg_ack_denied": ("仅收件人本人可确认已阅", "Only the recipient can confirm reading"),
     "msg_pw_default": ("工号", "employee ID"),
     "msg_pw_custom": ("自定义", "custom"),
+    "bg_multi_hint": ("BG_ADMIN 可用 / | ; 分隔填写多个 BG",
+                      "For BG_ADMIN, separate multiple BGs with / | ;"),
+    "msg_not_bg_admin": ("目标用户不是 BG_ADMIN", "Target user is not a BG_ADMIN"),
+    "msg_managed_bgs_saved": ("已更新 {uid} 管理的 BG：{bgs}",
+                              "Updated managed BGs for {uid}: {bgs}"),
+    "info_history": ("信息变更历史", "Info change history"),
+    "info_history_note": ("每次资料被覆盖前，旧版本会封存于此（is_active=否）",
+                          "Superseded snapshots are archived here (is_active = No)"),
+    "version": ("版本", "Version"),
+    "ended_at": ("封存时间", "Archived at"),
+    "changed_by": ("变更人", "Changed by"),
+    "no_versions": ("暂无历史版本", "No archived versions yet"),
+    "is_active_col": ("启用", "Active"),
 }
 
 

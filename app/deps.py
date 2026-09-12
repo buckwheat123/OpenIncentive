@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import DATA_DIR, SessionLocal
-from .models import User
+from .models import User, UserManagedBg, UserVersion, utcnow
 
 SESSION_COOKIE = "bonus_session"
 SESSION_MAX_AGE = 12 * 3600
@@ -82,3 +82,73 @@ def home_for(user: User) -> str:
         "BG_ADMIN": "/bg",
         "MANAGER": "/team",
     }.get(user.role, "/me")
+
+
+# ---------- BG scope helpers (feature #4: a BG_ADMIN may manage multiple BGs) ----------
+
+def bg_filter(user: User) -> set[str] | None:
+    """BGs an acting user may touch. None = unrestricted (platform ADMIN sees all)."""
+    if user.role == "ADMIN":
+        return None
+    if user.role == "BG_ADMIN":
+        return user.bg_scope
+    return {user.bg} if user.bg else set()
+
+
+def bg_allowed(user: User, emp_bg: str | None) -> bool:
+    """Whether an employee's BG falls inside the acting user's scope."""
+    scope = bg_filter(user)
+    return True if scope is None else (emp_bg in scope)
+
+
+def apply_managed_bgs(db: Session, user: User, bgs: list[str]) -> None:
+    """Sync a BG_ADMIN's administered BGs to the given list (ordered, de-duplicated)
+    WITHOUT committing, so callers can fold it into a larger transaction. Keeps User.bg
+    as the primary (first) managed BG."""
+    wanted = [b.strip() for b in bgs if b and b.strip()]
+    ordered: list[str] = []
+    for b in wanted:
+        if b not in ordered:
+            ordered.append(b)
+    current = {m.bg: m for m in user.managed_bgs}
+    for b in ordered:
+        if b not in current:
+            db.add(UserManagedBg(user_id=user.id, bg=b))
+    for b, row in current.items():
+        if b not in ordered:
+            db.delete(row)
+    if user.role == "BG_ADMIN":
+        user.bg = ordered[0] if ordered else None
+
+
+def set_managed_bgs(db: Session, user: User, bgs: list[str]) -> None:
+    """Idempotently sync a BG_ADMIN's administered BGs, committing the change."""
+    apply_managed_bgs(db, user, bgs)
+    db.commit()
+
+
+def current_info_tuple(user: User) -> tuple:
+    """Comparable snapshot of the mutable identity fields on the live user."""
+    return (user.name, user.email, user.role, user.bg or "", user.department or "",
+            user.job_title or "", user.manager_id)
+
+
+def archive_user_info(db: Session, user: User, actor: User | None) -> UserVersion:
+    """Feature #4: before a user's info changes, archive the current (superseded)
+    attribute set as an inactive UserVersion row (旧信息停用封存). Callers apply the new
+    values to `user` afterwards (新信息启用). Not committed here so it can join the
+    caller's transaction."""
+    highest = max((v.version for v in user_versions(db, user)), default=0)
+    snap = UserVersion(
+        user_id=user.id, version=highest + 1, name=user.name, email=user.email,
+        role=user.role, bg=user.bg, department=user.department, job_title=user.job_title,
+        manager_id=user.manager_id, is_active=False,
+        changed_by=actor.id if actor else None, ended_at=utcnow(),
+    )
+    db.add(snap)
+    return snap
+
+
+def user_versions(db: Session, user: User) -> list[UserVersion]:
+    return (db.query(UserVersion).filter(UserVersion.user_id == user.id)
+            .order_by(UserVersion.version.desc()).all())

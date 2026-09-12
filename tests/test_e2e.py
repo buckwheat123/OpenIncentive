@@ -52,11 +52,13 @@ LETTER_CSV = "\n".join([
     "2027-Q2,E003,赵磊,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve",
 ]) + "\n"
 
-# BG-scope probe: a Retail row (in scope) + a Commercial row (out of scope for BGA1).
+# BG-scope probe: E001 (Retail, in scope) + E004 (Commercial, in scope via BGA1's 2nd BG)
+# + E900 (HR, out of scope for BGA1 even though BGA1 manages two BGs).
 BG_SCOPE_CSV = "\n".join([
     BIG_HEADER,
     "2027-Q3,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,1300000,Standard Curve,1000000",
     "2027-Q3,E004,陈静,chen.jing@example.com,Commercial,Commercial Sales,商务专员,M002,EMPLOYEE,Sales Incentive,Revenue,60,1100000,Standard Curve,900000",
+    "2027-Q3,E900,周敏,zhou.min@example.com,HR,People,HRBP,M900,EMPLOYEE,Sales Incentive,Revenue,60,800000,Standard Curve,700000",
 ]) + "\n"
 
 
@@ -216,19 +218,36 @@ def main():
         assert no_actual is None                            # letter data carries no actuals
         print("[13] letter-data import (separate screen, no actual) OK")
 
-        # ---- BG admin: scoped template + out-of-BG rows rejected ----
+        # ---- BG admin #4: multi-BG scope (BGA1 manages Retail + Commercial) ----
         login(c, "BGA1", "BGA1")
         bg_tpl = c.get(f"{BASE}/admin/import/template.csv?period=2026-Q3").text
-        assert "E001" in bg_tpl and "E004" not in bg_tpl     # Commercial excluded
+        assert "E001" in bg_tpl and "E004" in bg_tpl       # both managed BGs included
+        assert "E900" not in bg_tpl                        # HR is out of scope for BGA1
         r = upload(c, f"{BASE}/admin/import/preview", BG_SCOPE_CSV)
         assert "可导入" in r.text and "超出本 BG 权限" in r.text, r.text[:600]
         bg_page = c.get(f"{BASE}/bg").text
-        assert "奖金总览" in bg_page and "E001" in bg_page and "季度总支付率" in bg_page
+        assert "奖金总览" in bg_page and "E001" in bg_page and "E004" in bg_page
+        assert "季度总支付率" in bg_page
+        assert "商业 / 零售" in bg_page                    # bg_title shows both managed BGs
+        assert "E900" not in bg_page                        # HR employee not in BGA1's /bg
         r = c.get(f"{BASE}/bg/export.csv")
-        assert "E001" in r.text and "E004" not in r.text
+        assert "E001" in r.text and "E004" in r.text and "E900" not in r.text
         rk = c.get(f"{BASE}/bg/export_kpi.csv")
-        assert "kpi_name" in rk.text and "E001" in rk.text and "E004" not in rk.text
-        print("[14] BG admin scope (template filter + out-of-BG rejection + BG view) OK")
+        assert "kpi_name" in rk.text and "E001" in rk.text and "E004" in rk.text \
+               and "E900" not in rk.text
+        print("[14] BG admin multi-BG scope (template/view/export include both, HR out) OK")
+
+        # ---- BG admin #4: many admins co-manage Retail (BGA2 only sees Retail) ----
+        login(c, "BGA2", "BGA2")
+        bg2_page = c.get(f"{BASE}/bg").text
+        assert "E001" in bg2_page and "E004" not in bg2_page   # only Retail
+        assert "零售" in bg2_page and "商业" not in bg2_page   # bg_title = Retail only
+        bg2_tpl = c.get(f"{BASE}/admin/import/template.csv?period=2026-Q3").text
+        assert "E001" in bg2_tpl and "E004" not in bg2_tpl
+        r = upload(c, f"{BASE}/admin/import/preview", BG_SCOPE_CSV)
+        # E004 (Commercial) is now out-of-scope for BGA2 as well
+        assert "超出本 BG 权限" in r.text
+        print("[14b] BG co-admin (BGA2) scope limited to Retail OK")
 
         # ---- platform admin proxies a BG admin ----
         login(c, "ADMIN1", "admin123")
@@ -373,6 +392,49 @@ def main():
         assert all(db.get(User, uid).is_active for uid in uids)
         assert db.get(User, admin.id).is_active              # acting admin never toggled
         print("[22b] ADMIN batch disable/enable users (self skipped) OK")
+
+        # ---- #4 user-info versioning: prior attribute set is archived (is_active=False) ----
+        from app.models import UserVersion
+        from app.deps import user_versions
+        db.expire_all()
+        e003 = db.query(User).filter_by(employee_id="E003").first()
+        before_dept = e003.department
+        versions_before = user_versions(db, e003)
+        bump_csv = "\n".join([
+            "employee_id,name,email,role,bg,department,job_title,manager_id,password",
+            f"E003,{e003.name},{e003.email},EMPLOYEE,Retail,Sales West,,,",
+        ]) + "\n"
+        r = c.post(f"{BASE}/admin/users/import/execute", data={"csv_text": bump_csv})
+        assert "导入完成" in r.text and "更新 1 人" in r.text, r.text[:400]
+        db.expire_all()
+        e003 = db.query(User).filter_by(employee_id="E003").first()
+        assert e003.department == "Sales West"
+        versions_after = user_versions(db, e003)
+        assert len(versions_after) == len(versions_before) + 1
+        latest_v = versions_after[0]
+        assert latest_v.is_active is False
+        assert latest_v.department == before_dept         # the superseded snapshot
+        assert latest_v.user_id == e003.id
+        # /person view exposes archived versions for admins
+        person_page = c.get(f"{BASE}/person/{e003.id}").text
+        assert "信息变更历史" in person_page and "Sales West" in person_page
+        print("[22c] user-info versioning archives superseded record on update OK")
+
+        # ---- #4 managed-BGs re-sync via admin console ----
+        bga2 = db.query(User).filter_by(employee_id="BGA2").first()
+        r = c.post(f"{BASE}/admin/users/{bga2.id}/managed_bgs",
+                   data={"bg": "Retail/HR"})
+        assert "已更新" in r.text and "BGA2" in r.text, r.text[:400]
+        db.expire_all()
+        bga2 = db.query(User).filter_by(employee_id="BGA2").first()
+        assert bga2.bg_scope == {"Retail", "HR"}
+        assert bga2.bg == "Retail"                       # primary stays first ordered BG
+        # restore seed state so downstream tests / demo see the intended pairing
+        r = c.post(f"{BASE}/admin/users/{bga2.id}/managed_bgs", data={"bg": "Retail"})
+        db.expire_all()
+        bga2 = db.query(User).filter_by(employee_id="BGA2").first()
+        assert bga2.bg_scope == {"Retail"}
+        print("[23] managed-BGs re-sync (BG_ADMIN may cover several BGs) OK")
 
     db.close()
     print("E2E ALL PASSED")

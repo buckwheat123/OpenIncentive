@@ -38,6 +38,15 @@ class User(Base):
 
     manager: Mapped["User | None"] = relationship(remote_side="User.id")
 
+    managed_bgs: Mapped[list["UserManagedBg"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", lazy="selectin")
+
+    @property
+    def bg_scope(self) -> set[str]:
+        """BGs this user is responsible for administering (a BG_ADMIN may own several;
+        one BG may have several BG_ADMINs). Empty set for non-BG_ADMIN roles."""
+        return {m.bg for m in self.managed_bgs if m.bg}
+
 
 class Curve(Base):
     __tablename__ = "curves"
@@ -255,3 +264,44 @@ class Letter(Base):
     template: Mapped[LetterTemplate | None] = relationship()
     recipient: Mapped[User] = relationship(foreign_keys=[recipient_id])
     sender: Mapped[User | None] = relationship(foreign_keys=[sent_by])
+
+
+class UserManagedBg(Base):
+    """Many-to-many link for feature #4: which BGs a BG_ADMIN is responsible for.
+    A BG_ADMIN may manage several BGs and a BG may have several BG_ADMINs. Employee /
+    manager rows keep their single home BG in User.bg instead."""
+
+    __tablename__ = "user_managed_bgs"
+    __table_args__ = (UniqueConstraint("user_id", "bg", name="uq_user_managed_bg"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    bg: Mapped[str] = mapped_column(String(100), index=True)
+
+    user: Mapped[User] = relationship(back_populates="managed_bgs")
+
+
+class UserVersion(Base):
+    """Append-only history of a person's superseded info (feature #4). When new info
+    comes in for the same employee, the live User row is updated to the new (enabled)
+    values and the previous attribute set is archived here with is_active=False
+    (停用封存). The current state always lives on User; these rows are the trail."""
+
+    __tablename__ = "user_versions"
+    __table_args__ = (UniqueConstraint("user_id", "version", name="uq_user_version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    email: Mapped[str] = mapped_column(String(200), default="")
+    role: Mapped[str] = mapped_column(String(20), default="EMPLOYEE")
+    bg: Mapped[str | None] = mapped_column(String(100))
+    department: Mapped[str | None] = mapped_column(String(100))
+    job_title: Mapped[str | None] = mapped_column(String(100))
+    manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)  # archived old info
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    ended_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+    changer: Mapped[User | None] = relationship(foreign_keys=[changed_by])

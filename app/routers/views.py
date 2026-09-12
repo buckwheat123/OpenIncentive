@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 
 from ..csvio import export_kpi_rows, export_results_rows, to_csv
-from ..deps import get_db, require_roles, require_user
+from ..deps import bg_allowed, bg_filter, get_db, require_roles, require_user
 from ..i18n import Translator, get_lang
 from ..models import BonusPlan, BonusResult, CalcRun, User
 from ..ui import render
@@ -81,7 +81,7 @@ def can_view(db, user: User, target: User) -> bool:
         return True
     if user.id == target.id:
         return True
-    if user.role == "BG_ADMIN" and target.bg == user.bg:
+    if user.role == "BG_ADMIN" and bg_allowed(user, target.bg):
         return True
     if user.role == "MANAGER":
         return any(u.id == target.id for u, _ in subtree(db, user.id))
@@ -174,7 +174,7 @@ def build_plan_table(db, uid: int, year: int, plan_name: str, tr: Translator) ->
     return {"plan_name": plan_name, "quarters": ["Q1", "Q2", "Q3", "Q4"], "rows": rows}
 
 
-def _person_context(db, target: User, year: str | None, lang: str):
+def _person_context(db, target: User, year: str | None, lang: str, actor: User | None = None):
     data_years = sorted(
         {int(p.split("-")[0]) for p in db.scalars(
             select(BonusPlan.period).where(
@@ -193,17 +193,22 @@ def _person_context(db, target: User, year: str | None, lang: str):
     tr = Translator(lang)
     plan_tables = [build_plan_table(db, target.id, year_int, name, tr)
                    for name in _year_plan_names(db, target.id, year_int)]
+    versions = []
+    if actor is not None and actor.role in ("ADMIN", "BG_ADMIN"):
+        from ..deps import user_versions
+        versions = user_versions(db, target)
     return {
         "view_user": target,
         "years": selectable,
         "year": year_int,
         "plan_tables": plan_tables,
+        "versions": versions,
     }
 
 
 @router.get("/me")
 def me(request: Request, year: str | None = None, user: User = Depends(require_user), db=Depends(get_db)):
-    ctx = _person_context(db, user, year, get_lang(request))
+    ctx = _person_context(db, user, year, get_lang(request), actor=user)
     return render(request, "person.html", user=user, **ctx)
 
 
@@ -213,7 +218,7 @@ def person(request: Request, uid: int, year: str | None = None,
     target = db.get(User, uid)
     if not target or not can_view(db, user, target):
         return RedirectResponse("/", status_code=303)
-    ctx = _person_context(db, target, year, get_lang(request))
+    ctx = _person_context(db, target, year, get_lang(request), actor=user)
     return render(request, "person.html", user=user, **ctx)
 
 
@@ -257,9 +262,11 @@ def bg(request: Request, period: str | None = None,
        user: User = Depends(require_roles("BG_ADMIN", "ADMIN")), db=Depends(get_db)):
     periods = all_periods(db)
     period = period or (periods[0] if periods else None)
-    members = db.scalars(
-        select(User).where(User.bg == user.bg, User.role != "ADMIN").order_by(User.employee_id)
-    ).all()
+    scope = bg_filter(user)
+    stmt = select(User).where(User.role != "ADMIN")
+    if scope is not None:
+        stmt = stmt.where(User.bg.in_(scope if scope else ["__none__"]))
+    members = db.scalars(stmt.order_by(User.bg, User.employee_id)).all()
     rows, rates = [], []
     for emp in members:
         r = result_for(db, emp.id, period) if period else None
@@ -267,15 +274,19 @@ def bg(request: Request, period: str | None = None,
             rates.append(r.final_rate_pct)
         rows.append({"emp": emp, "result": r})
     avg_rate = round(sum(rates) / len(rates), 2) if rates else None
+    tr = Translator(get_lang(request))
+    bg_title = " / ".join(tr.tl(b) for b in sorted(scope)) if scope else tr.tl(user.bg)
     return render(request, "bg.html", user=user, rows=rows, periods=periods, period=period,
-                  avg_rate=avg_rate)
+                  avg_rate=avg_rate, scope_bgs=sorted(scope) if scope else [], bg_title=bg_title)
 
 
 @router.get("/bg/export.csv")
 def bg_export(request: Request, period: str | None = None, user: User = Depends(require_roles("BG_ADMIN", "ADMIN")),
               db=Depends(get_db)):
-    rows = export_results_rows(db, bg=user.bg, period=period, lang=get_lang(request))
-    name = f"bonus_history_{user.bg}" + (f"_{period}" if period else "") + ".csv"
+    scope = bg_filter(user)
+    rows = export_results_rows(db, bg=scope, period=period, lang=get_lang(request))
+    tag = "_".join(sorted(scope)) if scope else "all"
+    name = f"bonus_history_{tag}" + (f"_{period}" if period else "") + ".csv"
     return Response(
         "\ufeff" + to_csv(rows),
         media_type="text/csv; charset=utf-8",
@@ -286,8 +297,10 @@ def bg_export(request: Request, period: str | None = None, user: User = Depends(
 @router.get("/bg/export_kpi.csv")
 def bg_export_kpi(request: Request, period: str | None = None,
                   user: User = Depends(require_roles("BG_ADMIN", "ADMIN")), db=Depends(get_db)):
-    rows = export_kpi_rows(db, bg=user.bg, period=period, lang=get_lang(request))
-    name = f"bonus_kpi_history_{user.bg}" + (f"_{period}" if period else "") + ".csv"
+    scope = bg_filter(user)
+    rows = export_kpi_rows(db, bg=scope, period=period, lang=get_lang(request))
+    tag = "_".join(sorted(scope)) if scope else "all"
+    name = f"bonus_kpi_history_{tag}" + (f"_{period}" if period else "") + ".csv"
     return Response(
         "\ufeff" + to_csv(rows),
         media_type="text/csv; charset=utf-8",

@@ -12,25 +12,30 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.db import DB_PATH, SessionLocal, init_db  # noqa: E402
 from app.models import (Actual, BonusPlan, Curve, Label, Letter, LetterTemplate,  # noqa: E402
-                        PlanKpi, User)
+                        PlanKpi, User, UserManagedBg)
 from app.security import hash_password  # noqa: E402
 from app.calc import apply_adjustment, run_calculation  # noqa: E402
 from app.i18n import Translator, invalidate_label_cache  # noqa: E402
 from app.mailer import send_mail  # noqa: E402
 from app.routers.letters import render_letter_body  # noqa: E402
 
-# employee_id, name, email, bg, department, job_title, role, manager_ext, password
+# employee_id, name, email, bg, department, job_title, role, manager_ext, password, managed_bgs
 USERS = [
-    ("ADMIN1", "平台管理员", "admin@example.com", None, None, None, "ADMIN", None, "admin123"),
-    ("BGA1", "Linda Chen", "linda.chen@example.com", "Retail", "Retail Management", "BG Director", "BG_ADMIN", None, "BGA1"),
-    ("SM1", "郑国安", "zheng.guonan@example.com", "Retail", "Sales Management", "销售副总裁", "MANAGER", None, "SM1"),
-    ("M001", "王强", "wang.qiang@example.com", "Retail", "Sales Management", "销售总监", "MANAGER", "SM1", "M001"),
-    ("M003", "孙浩", "sun.hao@example.com", "Retail", "Sales East", "区域经理", "MANAGER", "M001", "M003"),
-    ("E001", "张伟", "zhang.wei@example.com", "Retail", "Sales East", "销售代表", "EMPLOYEE", "M003", "E001"),
-    ("E002", "李娜", "li.na@example.com", "Retail", "Sales East", "销售代表", "EMPLOYEE", "M003", "E002"),
-    ("E003", "赵磊", "zhao.lei@example.com", "Retail", "Sales North", "高级销售代表", "EMPLOYEE", "M001", "E003"),
-    ("M002", "刘洋", "liu.yang@example.com", "Commercial", "Commercial Sales", "商务经理", "MANAGER", None, "M002"),
-    ("E004", "陈静", "chen.jing@example.com", "Commercial", "Commercial Sales", "商务专员", "EMPLOYEE", "M002", "E004"),
+    ("ADMIN1", "平台管理员", "admin@example.com", None, None, None, "ADMIN", None, "admin123", []),
+    ("BGA1", "Linda Chen", "linda.chen@example.com", "Retail", "Retail Management", "BG Director",
+     "BG_ADMIN", None, "BGA1", ["Retail", "Commercial"]),
+    ("BGA2", "Kenji Sato", "kenji.sato@example.com", "Retail", "Retail Management", "Co-BG Director",
+     "BG_ADMIN", None, "BGA2", ["Retail"]),
+    ("SM1", "郑国安", "zheng.guonan@example.com", "Retail", "Sales Management", "销售副总裁", "MANAGER", None, "SM1", []),
+    ("M001", "王强", "wang.qiang@example.com", "Retail", "Sales Management", "销售总监", "MANAGER", "SM1", "M001", []),
+    ("M003", "孙浩", "sun.hao@example.com", "Retail", "Sales East", "区域经理", "MANAGER", "M001", "M003", []),
+    ("E001", "张伟", "zhang.wei@example.com", "Retail", "Sales East", "销售代表", "EMPLOYEE", "M003", "E001", []),
+    ("E002", "李娜", "li.na@example.com", "Retail", "Sales East", "销售代表", "EMPLOYEE", "M003", "E002", []),
+    ("E003", "赵磊", "zhao.lei@example.com", "Retail", "Sales North", "高级销售代表", "EMPLOYEE", "M001", "E003", []),
+    ("M002", "刘洋", "liu.yang@example.com", "Commercial", "Commercial Sales", "商务经理", "MANAGER", None, "M002", []),
+    ("E004", "陈静", "chen.jing@example.com", "Commercial", "Commercial Sales", "商务专员", "EMPLOYEE", "M002", "E004", []),
+    ("M900", "何静", "he.jing@example.com", "HR", "People", "HR 总监", "MANAGER", None, "M900", []),
+    ("E900", "周敏", "zhou.min@example.com", "HR", "People", "HRBP", "EMPLOYEE", "M900", "E900", []),
 ]
 
 CURVES = [
@@ -47,7 +52,12 @@ LABELS = [
     ("Sales North", "华北销售部", "Sales North"),
     ("Commercial Sales", "商业销售部", "Commercial Sales"),
     ("Retail Management", "零售管理部", "Retail Management"),
+    ("HR", "人力资源", "HR"),
+    ("People", "人力资源部", "People"),
+    ("HR 总监", "HR Director", "HR 总监"),
+    ("HRBP", "HR Business Partner", "HRBP"),
     ("BG Director", "BG 负责人", "BG Director"),
+    ("Co-BG Director", "联席 BG 负责人", "Co-BG Director"),
     ("Revenue", "销售收入", "Revenue"),
     ("Customer Satisfaction", "客户满意度", "Customer Satisfaction"),
     ("Standard Curve", "标准曲线", "Standard Curve"),
@@ -97,7 +107,7 @@ def main():
     db = SessionLocal()
 
     users = {}
-    for emp_id, name, email, bg, dept, title, role, mgr, password in USERS:
+    for emp_id, name, email, bg, dept, title, role, mgr, password, m_bgs in USERS:
         user = User(employee_id=emp_id, name=name, email=email, bg=bg,
                     department=dept, job_title=title, role=role,
                     password_hash=hash_password(password))
@@ -105,9 +115,11 @@ def main():
         users[emp_id] = user
     db.flush()
     for row in USERS:
-        emp_id, mgr = row[0], row[7]
+        emp_id, mgr, m_bgs = row[0], row[7], row[9]
         if mgr:
             users[emp_id].manager_id = users[mgr].id
+        for b in m_bgs:
+            db.add(UserManagedBg(user_id=users[emp_id].id, bg=b))
     db.commit()
 
     curves = {}
@@ -179,11 +191,12 @@ def main():
 
     print("\n种子数据完成。登录账号：")
     print("  平台管理员  ADMIN1 / admin123")
-    print("  BG 管理员   BGA1  / BGA1     （Retail）")
-    print("  高层经理    SM1   / SM1      （Retail，团队含 N-1~N-3）")
-    print("  经理        M001  / M001     （Retail，团队含 N-1/N-2）")
-    print("  一线经理    M003  / M003     （Retail，直属 E001/E002）")
-    print("  员工        E001  / E001     （含 Sales Incentive + Quality Bonus 双计划）")
+    print("  BG 管理员  BGA1   / BGA1     （管理 Retail + Commercial 两个 BG）")
+    print("  BG 管理员  BGA2   / BGA2     （与 BGA1 共同管理 Retail）")
+    print("  高层经理   SM1    / SM1      （Retail，团队含 N-1~N-3）")
+    print("  经理       M001   / M001     （Retail，团队含 N-1/N-2）")
+    print("  一线经理   M003   / M003     （Retail，直属 E001/E002）")
+    print("  员工       E001   / E001     （含 Sales Incentive + Quality Bonus 双计划）")
     db.close()
 
 

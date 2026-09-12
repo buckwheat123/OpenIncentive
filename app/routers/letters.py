@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from ..csvio import (big_error_rows, big_summary, big_template_rows, decode_csv, execute_big_import,
                      parse_big_rows, recent_periods, to_csv)
-from ..deps import current_user, get_db, require_user, session_payload
+from ..deps import bg_filter, current_user, get_db, require_user, session_payload
 from ..i18n import Translator, get_lang
 from ..mailer import send_mail
 from ..models import Letter, LetterTemplate, User
@@ -33,8 +33,9 @@ def _allowed(user: User) -> bool:
     return user.role in ("BG_ADMIN", "ADMIN")
 
 
-def _scope_bg(user: User) -> str | None:
-    return None if user.role == "ADMIN" else user.bg
+def _scope_bg(user: User) -> set[str] | None:
+    """None means global (ADMIN); otherwise the set of BGs this actor manages."""
+    return bg_filter(user)
 
 
 # ---------- placeholders rendering ----------
@@ -120,9 +121,9 @@ def letters_log(request: Request, user: User = Depends(require_user), db=Depends
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
     stmt = select(Letter).order_by(Letter.sent_at.desc(), Letter.id.desc())
-    if _scope_bg(user):
-        bg = _scope_bg(user)
-        letters = [l for l in db.scalars(stmt).all() if l.recipient.bg == bg]
+    scope = _scope_bg(user)
+    if scope is not None:
+        letters = [l for l in db.scalars(stmt).all() if l.recipient and l.recipient.bg in scope]
     else:
         letters = db.scalars(stmt).all()
     return render(request, "letters/log.html", user=user, letters=letters)
@@ -207,8 +208,9 @@ def templates_list(request: Request, user: User = Depends(require_user), db=Depe
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
     stmt = select(LetterTemplate).order_by(LetterTemplate.updated_at.desc())
-    if _scope_bg(user):
-        stmt = stmt.where(LetterTemplate.bg == user.bg)
+    scope = _scope_bg(user)
+    if scope is not None:
+        stmt = stmt.where(LetterTemplate.bg.in_(scope if scope else ["__none__"]))
     return render(request, "letters/templates.html", user=user, templates=db.scalars(stmt).all())
 
 
@@ -222,7 +224,8 @@ def template_new(request: Request, user: User = Depends(require_user)):
 @router.get("/letters/templates/{tid}/edit")
 def template_edit(tid: int, request: Request, user: User = Depends(require_user), db=Depends(get_db)):
     template = db.get(LetterTemplate, tid)
-    if not _allowed(user) or not template or (_scope_bg(user) and template.bg != user.bg):
+    scope = _scope_bg(user)
+    if not _allowed(user) or not template or (scope is not None and template.bg not in scope):
         return flash("/letters/templates", Translator(get_lang(request)).t("no_permission"))
     return render(request, "letters/template_edit.html", user=user, template=template)
 
@@ -234,8 +237,9 @@ def template_save(request: Request, tid: int = Form(0), name: str = Form(...), s
     t = Translator(get_lang(request))
     if not _allowed(user):
         return flash("/", t.t("no_permission"))
+    scope = _scope_bg(user)
     template = db.get(LetterTemplate, tid) if tid else None
-    if template and _scope_bg(user) and template.bg != user.bg:
+    if template and scope is not None and template.bg not in scope:
         return flash("/letters/templates", t.t("no_permission"))
     if save_as_new == "true" or not template:
         template = LetterTemplate(bg=user.bg or "Global", created_by=user.id)
@@ -251,13 +255,15 @@ def template_save(request: Request, tid: int = Form(0), name: str = Form(...), s
 def compose(request: Request, user: User = Depends(require_user), db=Depends(get_db)):
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
-    stmt = select(LetterTemplate).order_by(LetterTemplate.name)
-    if _scope_bg(user):
-        stmt = stmt.where(LetterTemplate.bg == user.bg)
-    templates = db.scalars(stmt).all()
-    members_stmt = select(User).where(User.bg == user.bg, User.role != "ADMIN").order_by(User.employee_id) \
-        if _scope_bg(user) else select(User).where(User.role != "ADMIN").order_by(User.employee_id)
-    members = db.scalars(members_stmt).all()
+    scope = _scope_bg(user)
+    tmpl_stmt = select(LetterTemplate).order_by(LetterTemplate.name)
+    if scope is not None:
+        tmpl_stmt = tmpl_stmt.where(LetterTemplate.bg.in_(scope if scope else ["__none__"]))
+    templates = db.scalars(tmpl_stmt).all()
+    members_stmt = select(User).where(User.role != "ADMIN")
+    if scope is not None:
+        members_stmt = members_stmt.where(User.bg.in_(scope if scope else ["__none__"]))
+    members = db.scalars(members_stmt.order_by(User.employee_id)).all()
     return render(request, "letters/compose.html", user=user, templates=templates,
                   members=members, periods=all_periods(db))
 
@@ -273,10 +279,11 @@ def send(request: Request, template_id: int = Form(...), period: str = Form(...)
         return flash("/letters/compose", t.t("msg_template_missing"))
     if not recipients:
         return flash("/letters/compose", t.t("msg_need_recipient"))
+    scope = _scope_bg(user)
     sent = 0
     for uid in recipients:
         recipient = db.get(User, uid)
-        if not recipient or (_scope_bg(user) and recipient.bg != user.bg):
+        if not recipient or (scope is not None and recipient.bg not in scope):
             continue
         token = secrets.token_urlsafe(16)
         body = render_letter_body(db, template, recipient, period, message, token, t)

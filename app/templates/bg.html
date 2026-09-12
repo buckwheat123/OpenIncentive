@@ -2,7 +2,7 @@
 {% block title %}{{ t('bg_view') }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2 style="margin-top:0">{{ tl(user.bg) }} · {{ t('bonus_overview') }}</h2>
+  <h2 style="margin-top:0">{{ bg_title }} · {{ t('bonus_overview') }}</h2>
   <form class="inline" method="get">
     <div><label>{{ t('period') }}</label>
       <select name="period" onchange="this.form.submit()">
@@ -17,13 +17,14 @@
     {% endif %}
   </form>
   <table>
-    <tr><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('department') }}</th><th>{{ t('job_title') }}</th>
+    <tr><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('bg') }}</th><th>{{ t('department') }}</th><th>{{ t('job_title') }}</th>
         <th>{{ t('role') }}</th><th class="right">{{ t('weighted_rate') }}</th>
         <th class="right">{{ t('quarter_total_rate') }}</th><th>{{ t('status') }}</th><th></th></tr>
     {% for row in rows %}
     <tr>
       <td>{{ row.emp.employee_id }}</td>
       <td>{{ row.emp.name }}</td>
+      <td>{{ tl(row.emp.bg) or '-' }}</td>
       <td>{{ tl(row.emp.department) or '-' }}</td>
       <td>{{ tl(row.emp.job_title) or '-' }}</td>
       <td>{{ row.emp.role }}</td>
@@ -33,7 +34,7 @@
       <td><a href="/person/{{ row.emp.id }}?year={{ period.split('-')[0] if period else '' }}">{{ t('detail') }}</a></td>
     </tr>
     {% else %}
-    <tr><td colspan="9" class="muted">{{ t('no_members') }}</td></tr>
+    <tr><td colspan="10" class="muted">{{ t('no_members') }}</td></tr>
     {% endfor %}
   </table>
   {% if period %}<p>{{ t('avg_rate') }}：<strong>{{ avg_rate if avg_rate is not none else '-' }}{% if avg_rate is not none %}%{% endif %}</strong></p>{% endif %}

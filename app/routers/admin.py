@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 
 from ..calc import apply_adjustment, is_locked, run_calculation
-from ..csvio import (_csv_rows_for_calc_template, actual_delete_template_rows, adjustment_template_rows,
+from ..csvio import (_csv_rows_for_calc_template, _split_bgs, actual_delete_template_rows, adjustment_template_rows,
                      apply_deletions, big_error_rows, big_summary, big_template_rows, collect_originals,
                      decode_csv, deletion_logs, execute_big_import, execute_user_import, export_kpi_rows,
                      export_results_rows,
@@ -18,7 +18,8 @@ from ..csvio import (_csv_rows_for_calc_template, actual_delete_template_rows, a
                      plan_delete_template_rows, recent_periods, resolve_employee, to_csv, user_error_rows,
                      user_summary, user_template_rows)
 from ..curves import parse_points
-from ..deps import SESSION_COOKIE, SESSION_MAX_AGE, get_db, home_for, make_session, require_roles
+from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, apply_managed_bgs, get_db, home_for, make_session,
+                    require_roles)
 from ..i18n import Translator, get_lang, invalidate_label_cache
 from ..models import Adjustment, BonusPlan, BonusResult, CalcRun, Curve, DataOpLog, Label, Lock, User, utcnow
 from ..security import hash_password
@@ -44,7 +45,13 @@ def _t(request: Request) -> Translator:
 def dashboard(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
     runs = db.scalars(select(CalcRun).order_by(CalcRun.created_at.desc(), CalcRun.id.desc())).all()
     locks = db.scalars(select(Lock).order_by(Lock.locked_at.desc())).all()
-    bgs = sorted({u.bg for u in db.scalars(select(User)).all() if u.bg})
+    bgs_set: set[str] = set()
+    for u in db.scalars(select(User)).all():
+        if u.bg:
+            bgs_set.add(u.bg)
+        for m in u.managed_bgs:
+            bgs_set.add(m.bg)
+    bgs = sorted(bgs_set)
     periods = sorted(db.scalars(select(BonusPlan.period).distinct()).all(), reverse=True)
     return render(request, "admin/dashboard.html", user=user, runs=runs, locks=locks, bgs=bgs, periods=periods)
 
@@ -68,12 +75,37 @@ def users_create(request: Request, name: str = Form(...), employee_id: str = For
     ).first()
     if exists:
         return flash("/admin/users", t.t("msg_user_exists", uid=employee_id))
-    db.add(User(name=name, employee_id=employee_id, email=email, role=role.upper(), bg=bg or None,
-                department=department or None, job_title=job_title or None,
-                password_hash=hash_password(password or employee_id)))
+    role_u = (role or "").upper()
+    bg_list = _split_bgs(bg) if role_u == "BG_ADMIN" else [bg.strip()] if bg.strip() else []
+    primary = bg_list[0] if bg_list else None
+    new_user = User(name=name, employee_id=employee_id, email=email, role=role_u, bg=primary,
+                    department=department or None, job_title=job_title or None,
+                    password_hash=hash_password(password or employee_id))
+    db.add(new_user)
+    db.flush()
+    if role_u == "BG_ADMIN" and bg_list:
+        apply_managed_bgs(db, new_user, bg_list)
     db.commit()
     return flash("/admin/users", t.t("msg_user_created", uid=employee_id,
                                      pw=t.t("msg_pw_custom" if password else "msg_pw_default")))
+
+
+@router.post("/users/{uid}/managed_bgs")
+def users_managed_bgs(uid: int, request: Request, bg: str = Form(""),
+                      user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    """Sync the set of BGs a BG_ADMIN manages (feature #4)."""
+    t = _t(request)
+    target = db.get(User, uid)
+    if not target or target.role != "BG_ADMIN":
+        return flash("/admin/users", t.t("msg_not_bg_admin"))
+    bgs = _split_bgs(bg)
+    before = sorted(target.bg_scope)
+    apply_managed_bgs(db, target, bgs)
+    db.add(DataOpLog(op_type="UPDATE", entity="user", entity_ref=target.employee_id,
+                     reason=f"managed BGs: {before} → {bgs}", created_by=user.id))
+    db.commit()
+    return flash("/admin/users", t.t("msg_managed_bgs_saved", uid=target.employee_id,
+                                     bgs=" / ".join(bgs) if bgs else "-"))
 
 
 # ---------- batch user import (ADMIN only, two-pass: create / update / ignore identical) ----------
@@ -187,9 +219,10 @@ def curves_save(request: Request, cid: int = Form(0), name: str = Form(...), poi
 
 # ---------- unified quarterly big-table import (ADMIN + BG_ADMIN, two-pass) ----------
 
-def _import_bg_scope(user: User) -> str | None:
-    """BG admins only see/modify their own BG; platform admins see everything."""
-    return user.bg if user.role == "BG_ADMIN" else None
+def _import_bg_scope(user: User) -> set[str] | None:
+    """BG admins only see/modify the BGs they manage; platform admins see everything."""
+    from ..deps import bg_filter
+    return bg_filter(user)
 
 
 @router.get("/import")

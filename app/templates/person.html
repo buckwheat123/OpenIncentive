@@ -35,4 +35,33 @@
 {% else %}
   <div class="card"><p class="muted">{{ t('no_plans_year') }}</p></div>
 {% endif %}
+
+{% if versions is defined %}
+<div class="card">
+  <h3 style="margin-top:0">{{ t('info_history') }}</h3>
+  <p class="muted">{{ t('info_history_note') }}</p>
+  {% if versions %}
+  <table>
+    <tr><th>{{ t('version') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th>
+        <th>{{ t('role') }}</th><th>{{ t('bg') }}</th><th>{{ t('department') }}</th>
+        <th>{{ t('job_title') }}</th><th>{{ t('manager') }}</th>
+        <th>{{ t('is_active_col') }}</th><th>{{ t('changed_by') }}</th><th>{{ t('ended_at') }}</th></tr>
+    {% for v in versions %}
+    <tr>
+      <td>v{{ v.version }}</td>
+      <td>{{ v.name }}</td><td>{{ v.email }}</td><td>{{ v.role }}</td>
+      <td>{{ tl(v.bg) or '-' }}</td><td>{{ tl(v.department) or '-' }}</td>
+      <td>{{ tl(v.job_title) or '-' }}</td>
+      <td>{{ v.manager_id if v.manager_id else '-' }}</td>
+      <td>{% if v.is_active %}✓{% else %}✗{% endif %}</td>
+      <td>{{ v.changer.employee_id if v.changer else '-' }}</td>
+      <td>{{ v.ended_at|fmt if v.ended_at else '-' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">{{ t('no_versions') }}</p>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}

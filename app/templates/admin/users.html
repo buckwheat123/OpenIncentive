@@ -12,12 +12,13 @@
         <option>EMPLOYEE</option><option>MANAGER</option><option>BG_ADMIN</option><option>ADMIN</option>
       </select>
     </div>
-    <div><label>{{ t('bg') }}</label><input name="bg"></div>
+    <div><label>{{ t('bg') }}</label><input name="bg" placeholder="{{ t('bg_multi_hint') }}"></div>
     <div><label>{{ t('department') }}</label><input name="department"></div>
     <div><label>{{ t('job_title') }}</label><input name="job_title"></div>
     <div><label>{{ t('initial_password') }}</label><input name="password"></div>
     <button class="btn" type="submit">{{ t('create') }}</button>
   </form>
+  <p class="muted">{{ t('bg_multi_hint') }}</p>
 </div>
 <div class="card">
   <h3>{{ t('users_batch_import') }}</h3>
@@ -46,7 +47,16 @@
     <tr>
       <td>{% if u.id != user.id %}<input type="checkbox" name="uids" value="{{ u.id }}" form="batch-toggle">{% endif %}</td>
       <td>{{ u.employee_id }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
-      <td>{{ u.role }}</td><td>{{ tl(u.bg) or '-' }}</td>
+      <td>{{ u.role }}</td>
+      <td>
+        {% if u.role == 'BG_ADMIN' %}
+          <form method="post" action="/admin/users/{{ u.id }}/managed_bgs" class="inline-form">
+            <input type="text" name="bg" size="14"
+                   value="{{ ((u.bg_scope|sort)|join('/')) if u.bg_scope else (u.bg or '') }}">
+            <button class="btn tiny" type="submit">{{ t('save') }}</button>
+          </form>
+        {% else %}{{ tl(u.bg) or '-' }}{% endif %}
+      </td>
       <td>{{ tl(u.department) or '-' }}</td><td>{{ tl(u.job_title) or '-' }}</td>
       <td>{{ u.updated_at|fmt }}</td>
       <td>{% if u.is_active %}<span class="tag ok">{{ t('active') }}</span>{% else %}<span class="tag">{{ t('inactive') }}</span>{% endif %}</td>

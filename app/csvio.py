@@ -14,19 +14,42 @@ Conventions
 import csv
 import io
 import json
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .calc import is_locked
+from .deps import apply_managed_bgs, archive_user_info, bg_allowed, current_info_tuple
 from .i18n import DEFAULT_LANG, Translator, invalidate_label_cache
-from .models import Actual, BonusPlan, Curve, DataOpLog, Label, PlanKpi, User
+from .models import Actual, BonusPlan, Curve, DataOpLog, Label, PlanKpi, User, UserManagedBg
 from .security import hash_password
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _bg_in(emp_bg: str | None, bg) -> bool:
+    """Match an employee's BG against a scope that may be None (all), a single BG, or a
+    collection of BGs (a BG_ADMIN who administers several — feature #4)."""
+    if not bg:
+        return True
+    if isinstance(bg, (set, frozenset, list, tuple)):
+        return emp_bg in bg
+    return emp_bg == bg
+
+
+def _split_bgs(bg_field: str) -> list[str]:
+    """Split a BG cell that may list several administered BGs (feature #4: a BG_ADMIN can
+    own multiple BGs). Separators: / | 、 ; . Returns an ordered, de-duplicated list."""
+    out: list[str] = []
+    for part in re.split(r"[/|、;；]", bg_field or ""):
+        part = part.strip()
+        if part and part not in out:
+            out.append(part)
+    return out
 
 
 def decode_csv(raw: bytes) -> str:
@@ -106,7 +129,7 @@ def big_template_rows(db: Session, period: str | None = None, bg: str | None = N
     ).all()
     for p in plans:
         emp = db.get(User, p.employee_id)
-        if bg and emp.bg != bg:
+        if not _bg_in(emp.bg, bg):
             continue
         mgr = db.get(User, emp.manager_id) if emp.manager_id else None
         for kpi in p.kpis:
@@ -214,7 +237,7 @@ def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
             entry["status"] = t.t("row_no_period"); continue
         if employee is None:
             entry["status"] = t.t("row_no_employee"); continue
-        if actor.role == "BG_ADMIN" and employee.bg != actor.bg:
+        if actor.role == "BG_ADMIN" and not bg_allowed(actor, employee.bg):
             entry["status"] = t.t("row_out_of_bg"); continue
         if is_locked(db, period, employee.bg):
             entry["status"] = t.t("row_sealed"); entry["note"] = f"{period}/{employee.bg}"; continue
@@ -325,6 +348,7 @@ def execute_big_import(db: Session, text: str, actor: User, lang: str = DEFAULT_
         employee = db.get(User, emp_id)
         changes = _user_info_changes(db, employee, _group_info_raw(rows), actor)
         if changes:
+            archive_user_info(db, employee, actor)
             for field, value in changes.items():
                 if field == "manager":
                     employee.manager_id = value
@@ -411,15 +435,28 @@ def user_template_rows() -> list[list]:
 
 
 def _user_field_changes(db: Session, existing: User, raw: dict) -> dict:
-    """Fields present in the row that differ from the current user record."""
+    """Fields present in the row that differ from the current user record.
+
+    BG handling is role-aware (feature #4): a BG_ADMIN may administer several BGs, so
+    their BG cell is parsed as a list and compared against the current managed-BG set
+    (stored under a "bgs" key); everyone else keeps a single home BG ("bg" key)."""
     changes: dict = {}
-    for field in ("name", "email", "bg", "department", "job_title"):
+    for field in ("name", "email", "department", "job_title"):
         v = (raw.get(field) or "").strip()
         if v and v != (getattr(existing, field) or ""):
             changes[field] = v
     role = (raw.get("role") or "").strip().upper()
     if role and role != existing.role:
         changes["role"] = role
+    effective_role = role or existing.role
+    bg_field = (raw.get("bg") or "").strip()
+    if bg_field:
+        if effective_role == "BG_ADMIN":
+            new_bgs = _split_bgs(bg_field)
+            if new_bgs and set(new_bgs) != existing.bg_scope:
+                changes["bgs"] = new_bgs
+        elif bg_field != (existing.bg or ""):
+            changes["bg"] = bg_field
     mgr_ext = (raw.get("manager_id") or "").strip()
     if mgr_ext:
         mgr = resolve_employee(db, mgr_ext, "")
@@ -511,11 +548,19 @@ def execute_user_import(db: Session, text: str, actor: User, lang: str = DEFAULT
     for e in entries:
         if e["ok"] and e["action"] == "create":
             password = (e["raw"].get("password") or "").strip() or e["employee_id"]
+            bgs = _split_bgs(e["bg"])
+            if e["role"] == "BG_ADMIN":
+                primary = bgs[0] if bgs else None
+            else:
+                primary = e["bg"] or None
             user = User(employee_id=e["employee_id"], name=e["name"], email=e["email"],
-                        role=e["role"], bg=e["bg"] or None, department=e["department"] or None,
+                        role=e["role"], bg=primary, department=e["department"] or None,
                         job_title=e["job_title"] or None, password_hash=hash_password(password))
             db.add(user)
             db.flush()
+            if e["role"] == "BG_ADMIN":
+                for b in bgs:
+                    db.add(UserManagedBg(user_id=user.id, bg=b))
             created_map[e["employee_id"]] = user
             created += 1
 
@@ -524,8 +569,9 @@ def execute_user_import(db: Session, text: str, actor: User, lang: str = DEFAULT
         if not e["ok"]:
             continue
         note = f" ({proxy_note})" if proxy_note else ""
+        is_create = e["action"] == "create"
         user = created_map.get(e["employee_id"]) or e["existing"]
-        changed_fields = [] if e["action"] == "create" else list(e["changes"].keys())
+        changed_fields: list[str] = []
         mgr_ext = e["manager_ext"]
         proxied = False
         if mgr_ext:
@@ -538,18 +584,26 @@ def execute_user_import(db: Session, text: str, actor: User, lang: str = DEFAULT
             if mgr is not None and mgr.id != user.manager_id:
                 user.manager_id = mgr.id
                 changed_fields.append("manager")
+        # Feature #4: archive the superseded (current) info before it is overwritten.
+        if not is_create:
+            archive_user_info(db, user, actor)
         for field, value in e["changes"].items():
-            if field == "manager":
-                continue  # handled above via resolution
+            if field in ("manager", "bgs"):
+                continue  # manager handled above; bgs handled below
             setattr(user, field, value)
+            changed_fields.append(field)
+        if "bgs" in e["changes"]:
+            apply_managed_bgs(db, user, e["changes"]["bgs"])
+            changed_fields.append("bg")
         if changed_fields:
             user.updated_at = utcnow()
-        action_txt = "create" if e["action"] == "create" else "update " + ", ".join(sorted(changed_fields))
+        action_txt = ("create" if is_create
+                      else "update " + ", ".join(sorted(set(changed_fields))))
         if proxied:
             action_txt += " [manager missing → admin proxy]"
         db.add(DataOpLog(op_type="IMPORT", entity="user", entity_ref=e["employee_id"],
                          reason=f"batch user import: {action_txt}" + note, created_by=actor.id))
-        if e["action"] != "create":
+        if not is_create:
             updated += 1
     db.commit()
     summary = user_summary(entries)
@@ -753,6 +807,7 @@ def collect_originals(db: Session) -> list[str]:
     """Distinct DB field values that may need translation."""
     originals: set[str] = set()
     originals |= {v for v in db.scalars(select(User.bg).distinct()).all() if v}
+    originals |= {v for v in db.scalars(select(UserManagedBg.bg).distinct()).all() if v}
     originals |= {v for v in db.scalars(select(User.department).distinct()).all() if v}
     originals |= {v for v in db.scalars(select(User.job_title).distinct()).all() if v}
     originals |= {v for v in db.scalars(select(Curve.name)).all() if v}
@@ -825,7 +880,7 @@ def _latest_results_by_period(db: Session, bg: str | None, period: str | None,
             for r in db.scalars(select(BonusResult).where(BonusResult.run_id == run.id)).all():
                 latest[(r.employee_id, r.plan_name)] = r
         for (emp_id, plan_name), r in sorted(latest.items(), key=lambda kv: kv[0]):
-            if bg and r.employee.bg != bg:
+            if not _bg_in(r.employee.bg, bg):
                 continue
             out.append((p, r))
     return out
