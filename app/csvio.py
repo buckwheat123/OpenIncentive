@@ -326,11 +326,18 @@ def big_summary(entries: list[dict]) -> dict:
 
 
 def execute_big_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
-                       with_actual: bool = True, proxy_note: str = "") -> str:
+                       with_actual: bool = True, proxy_note: str = "",
+                       conflict_check: bool = False) -> str:
     """Pass-2: re-parse and import the valid rows. Identical rows are ignored,
-    invalid rows are skipped (they were reported in the preview)."""
+    invalid rows are skipped (they were reported in the preview).
+
+    conflict_check=True additionally blocks any row whose quota disagrees with an
+    already-current quarterly plan (Batch E2b) — used by the letter-data import so it
+    can never silently overwrite the calculation data."""
     t = Translator(lang)
     entries = parse_big_rows(db, text, actor, lang, with_actual)
+    if conflict_check:
+        mark_letter_conflicts(db, entries, t)
     summary = big_summary(entries)
     groups: dict[tuple, list[dict]] = {}
     order: list[tuple] = []
@@ -535,14 +542,99 @@ def year_letter_template_rows(db: Session, year: str | None = None,
 def parse_year_letter_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG) -> list[dict]:
     """Parse a year-form sheet by first expanding it into the big-table format, then
     delegating to parse_big_rows. This keeps the error vocabulary (BG scope, curve,
-    required, latest-wins) identical between the two letter/calculation sheets."""
-    return parse_big_rows(db, year_to_big_text(text), actor, lang, with_actual=False)
+    required, latest-wins) identical between the two letter/calculation sheets.
+
+    Feature #10 / Batch E2b: after the standard parse, rows that CONFLICT with the
+    quarterly calculation data (same period+employee+plan+KPI already present with a
+    different quota) are blocked here at preview time so they are never silently
+    overwritten by a letter import. The calculation sheet remains the authority; the
+    user downloads the conflict list to reconcile."""
+    entries = parse_big_rows(db, year_to_big_text(text), actor, lang, with_actual=False)
+    mark_letter_conflicts(db, entries, Translator(lang))
+    return entries
+
+
+def mark_letter_conflicts(db: Session, entries: list[dict], t: Translator) -> None:
+    """Flag (and block) letter rows whose quota disagrees with an already-current
+    quarterly plan for the same period+employee+plan+KPI. Rows that match or are new
+    are left untouched so they still import normally."""
+    for e in entries:
+        e.setdefault("conflict", False)
+        if not e["ok"]:
+            continue
+        plan = db.scalars(
+            select(BonusPlan).where(BonusPlan.period == e["period"],
+                                    BonusPlan.employee_id == e["employee"].id,
+                                    BonusPlan.plan_name == e["plan_name"],
+                                    BonusPlan.is_current == True,   # noqa: E712
+                                    BonusPlan.is_deleted == False)  # noqa: E712
+        ).first()
+        if plan is None:
+            continue  # brand-new plan for this quarter → importable
+        kpi = next((k for k in plan.kpis if k.kpi_name == e["kpi_name"]), None)
+        if kpi is None:
+            continue  # the sheet defines the full KPI set; a new KPI is not a conflict
+        if abs(kpi.quota - e["quota"]) > 1e-6:
+            e["conflict"] = True
+            e["existing_quota"] = kpi.quota
+            e["incoming_quota"] = e["quota"]
+            e["ok"] = False
+            e["status"] = t.t("row_letter_conflict")
+            e["note"] = t.t("row_letter_conflict_note",
+                            old=fmt_num(kpi.quota), new=fmt_num(e["quota"]))
+
+
+def letter_summary(entries: list[dict]) -> dict:
+    s = big_summary(entries)
+    s["conflicts"] = sum(1 for e in entries if e.get("conflict"))
+    return s
+
+
+def year_letter_conflict_rows(db: Session, text: str, actor: User,
+                              lang: str = DEFAULT_LANG) -> list[list]:
+    """Conflict list CSV, one row per ORIGINAL year row that carries at least one
+    conflicting quarter. The four ytd_qN columns show the incoming (letter) values
+    and an existing_* set shows what the quarterly calculation already holds, so the
+    sheet can be fixed and reconciled against the calc data."""
+    t = Translator(lang)
+    expanded = year_to_big_text(text)
+    entries = parse_big_rows(db, expanded, actor, lang, with_actual=False)
+    mark_letter_conflicts(db, entries, t)
+    # index conflicts by (year, employee, plan, kpi) -> {quarter_label: (old, new)}
+    conf: dict[tuple, dict] = {}
+    for e in entries:
+        if not e.get("conflict"):
+            continue
+        raw = e["raw"]
+        year = (raw.get("period") or "").split("-")[0]
+        q = (raw.get("period") or "").split("-")[1] if "-" in (raw.get("period") or "") else ""
+        key = (year, raw.get("employee_id") or "", raw.get("plan_name") or "", raw.get("kpi_name") or "")
+        conf.setdefault(key, {})[q] = (e["existing_quota"], e["incoming_quota"])
+    header = YEAR_HEADER + ["existing_q1", "existing_q2", "existing_q3", "existing_q4", "conflict_note"]
+    rows = [header]
+    for orow in _rows(text):
+        year = (orow.get("year") or "").strip()
+        if not year:
+            continue
+        key = (year, (orow.get("employee_id") or "").strip(),
+               (orow.get("plan_name") or "").strip(), (orow.get("kpi_name") or "").strip())
+        quarters = conf.get(key)
+        if not quarters:
+            continue
+        existing = [fmt_num(quarters[q][0]) if q in quarters else "" for q in ("Q1", "Q2", "Q3", "Q4")]
+        detail = "; ".join(
+            t.t("conflict_quarter_detail", q=q, old=fmt_num(o), new=fmt_num(n))
+            for q, (o, n) in sorted(quarters.items()))
+        out = [orow.get(h, "") or "" for h in YEAR_HEADER]
+        rows.append(out + existing + [detail])
+    return rows
+
 
 
 def execute_year_letter_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
                                proxy_note: str = "") -> str:
     return execute_big_import(db, year_to_big_text(text), actor, lang, with_actual=False,
-                              proxy_note=proxy_note)
+                              proxy_note=proxy_note, conflict_check=True)
 
 
 def year_letter_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG) -> list[list]:

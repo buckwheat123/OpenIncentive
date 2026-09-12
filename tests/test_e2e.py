@@ -72,6 +72,16 @@ YEAR_LETTER_CSV = "\n".join([
     "Sales Incentive,Revenue,60,Standard Curve,1000000,,1400000,",
 ]) + "\n"
 
+# Conflict probe (Batch E2b): E001's 2026 Sales Incentive/Revenue plan already exists
+# with quarterly targets 2600000 (Q2) / 3900000 (Q3). (2026-Q1 is sealed by test [9],
+# so we use the unsealed Q2/Q3.) Q2 is re-declared with a DIFFERENT quota (999999 →
+# conflict), Q3 matches the stored value (→ importable, not a conflict).
+CONFLICT_YEAR_CSV = "\n".join([
+    YEAR_HEADER,
+    "2026,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,"
+    "Sales Incentive,Revenue,60,Standard Curve,,999999,3900000,",
+]) + "\n"
+
 
 def login(client: httpx.Client, uid: str, pw: str):
     r = client.post(f"{BASE}/login", data={"login_id": uid, "password": pw}, follow_redirects=True)
@@ -251,6 +261,26 @@ def main():
         assert q3 and q3.kpis[0].quota == 1400000
         assert db.query(BonusPlan).filter_by(period="2028-Q2", employee_id=e003.id).first() is None
         print("[13b] year-format letter-data import (YTD cols → quarterly plans) OK")
+
+        # ---- conflict detection: letter vs existing quarterly calc (Batch E2b) ----
+        e001 = db.query(User).filter_by(employee_id="E001").first()
+        q2_before = db.query(BonusPlan).filter_by(period="2026-Q2", employee_id=e001.id,
+                                                  plan_name="Sales Incentive", is_current=True).first()
+        assert next(k for k in q2_before.kpis if k.kpi_name == "Revenue").quota == 2600000
+        cf = upload(c, f"{BASE}/letters/data/preview", CONFLICT_YEAR_CSV)
+        assert "与季度计算数据冲突" in cf.text, cf.text[:600]      # Q2 blocked
+        assert "冲突清单" in cf.text                              # dedicated download button shown
+        cfr = c.post(f"{BASE}/letters/data/conflicts.csv", data={"csv_text": CONFLICT_YEAR_CSV})
+        assert cfr.status_code == 200 and "existing_q2" in cfr.text
+        assert "2600000" in cfr.text and "999999" in cfr.text     # sheet value vs letter value
+        cf_ex = c.post(f"{BASE}/letters/data/execute", data={"csv_text": CONFLICT_YEAR_CSV})
+        assert "计划新版本 1 个" in cf_ex.text, cf_ex.text[:600]   # only non-conflicting Q3 lands
+        db.expire_all()
+        q2_after = db.query(BonusPlan).filter_by(period="2026-Q2", employee_id=e001.id,
+                                                 plan_name="Sales Incentive", is_current=True).first()
+        assert next(k for k in q2_after.kpis if k.kpi_name == "Revenue").quota == 2600000  # untouched
+        assert q2_after.version == q2_before.version              # no new Q2 version created
+        print("[13c] letter-vs-calc conflict blocked + conflict CSV exported OK")
 
         # ---- BG admin #4: multi-BG scope (BGA1 manages Retail + Commercial) ----
         login(c, "BGA1", "BGA1")

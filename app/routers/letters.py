@@ -12,9 +12,10 @@ from fastapi import APIRouter, Depends, Form, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import select
 
-from ..csvio import (big_summary, decode_csv, execute_year_letter_import,
+from ..csvio import (decode_csv, execute_year_letter_import, letter_summary,
                      parse_year_letter_rows, recent_years, to_csv,
-                     year_letter_error_rows, year_letter_template_rows)
+                     year_letter_conflict_rows, year_letter_error_rows,
+                     year_letter_template_rows)
 from ..deps import bg_filter, current_user, get_db, require_user, session_payload
 from ..i18n import Translator, get_lang
 from ..mailer import send_mail
@@ -230,9 +231,9 @@ async def letter_data_preview(request: Request, file: UploadFile | None = None,
     if not entries:
         return flash("/letters/data", t.t("msg_no_rows"))
     return render(request, "import_preview.html", user=user, rows=entries, csv_text=text,
-                  summary=big_summary(entries), with_actual=False,
+                  summary=letter_summary(entries), with_actual=False,
                   execute_url="/letters/data/execute", errors_url="/letters/data/errors.csv",
-                  back_url="/letters/data")
+                  conflicts_url="/letters/data/conflicts.csv", back_url="/letters/data")
 
 
 @router.post("/letters/data/execute")
@@ -259,6 +260,18 @@ def letter_data_errors(request: Request, csv_text: str = Form(...),
         return flash("/", Translator(get_lang(request)).t("no_permission"))
     rows = year_letter_error_rows(db, csv_text, user, get_lang(request))
     return _csv_response(rows, "letter_data_errors.csv")
+
+
+@router.post("/letters/data/conflicts.csv")
+def letter_data_conflicts(request: Request, csv_text: str = Form(...),
+                          user: User = Depends(require_user), db=Depends(get_db)):
+    """Download the conflict list: letter rows whose quota disagrees with the existing
+    quarterly calculation data (feature #10 / Batch E2b). Each row shows the incoming
+    YTD targets plus the quarterly values already stored, so they can be reconciled."""
+    if not _allowed(user):
+        return flash("/", Translator(get_lang(request)).t("no_permission"))
+    rows = year_letter_conflict_rows(db, csv_text, user, get_lang(request))
+    return _csv_response(rows, "letter_data_conflicts.csv")
 
 
 # ---------- templates ----------

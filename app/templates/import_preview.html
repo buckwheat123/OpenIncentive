@@ -4,6 +4,9 @@
 <div class="card">
   <h3>{{ t('preview_result') }}</h3>
   <p class="summary-counts">{{ t('summary_counts', ok=summary.ok, ig=summary.ignored, er=summary.errors) }}</p>
+  {% if summary.conflicts %}
+  <p class="summary-counts" style="color:#b00">{{ t('conflict_counts', n=summary.conflicts) }}</p>
+  {% endif %}
   <p class="muted">{{ t('preview_note') }}</p>
   <table>
     <tr>
@@ -40,6 +43,12 @@
     <form method="post" action="{{ errors_url }}">
       <input type="hidden" name="csv_text" value="{{ csv_text }}">
       <button class="btn" type="submit">{{ t('download_errors') }}</button>
+    </form>
+    {% endif %}
+    {% if conflicts_url and summary.conflicts %}
+    <form method="post" action="{{ conflicts_url }}">
+      <input type="hidden" name="csv_text" value="{{ csv_text }}">
+      <button class="btn warn" type="submit">{{ t('download_conflicts') }}</button>
     </form>
     {% endif %}
     <a class="btn" href="{{ back_url }}">{{ t('back') }}</a>
