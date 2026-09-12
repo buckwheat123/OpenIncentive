@@ -38,7 +38,7 @@ If you're curious about the story behind this project, you can find my story at 
 
 # 奖金计算平台（MVP v4）
 
-基于 Python 的线上奖金计算与沟通平台：**季度大表导入**（一张表、版本化、校验 + 留痕，与系统一致的数据静默忽略）→ **通知信数据导入**（独立页面、不含实绩列）→ 管理员配置 **Curve** → **两步式触发计算** → **特殊调整**（单人或 CSV 批量、增量、留痕）→ **数据删除**（CSV、留痕）→ **封存** → **导出（两张表：总支付率 + 各 KPI 明细）** → **角色化查看**（员工 / 多层经理 / BG 管理员）→ **代操作**（平台管理员代理 BG 管理员）→ **批量导入用户**（仅平台管理员）→ **奖金通知信**（模板 + HTML 邮件 + Curve 区间表 + 已阅追踪）。默认中文界面，支持中/英切换，数据库字段值可通过「语言管理」维护翻译。
+基于 Python 的线上奖金计算与沟通平台：**季度大表导入**（一张表、版本化、校验 + 留痕，与系统一致的数据静默忽略）→ **通知信数据导入**（独立页面、年度格式、与季度计算数据冲突自动拦截并可导出冲突清单）→ 管理员配置 **Curve** → **两步式触发计算** → **特殊调整**（单人或 CSV 批量、增量、留痕）→ **数据删除**（CSV、留痕）→ **封存** → **导出（两张表：总支付率 + 各 KPI 明细）** → **角色化查看**（员工 / 多层经理 / BG 管理员，BG 管理员可多对多管理多个 BG）→ **代操作**（平台管理员代理 BG 管理员）→ **批量导入用户**（仅平台管理员，员工信息变更自动版本化封存留痕）→ **奖金通知信**（Global 全局模板 + 计划/绩效两张表占位符 + HTML 邮件 + Curve 区间表 + 已阅追踪）。默认中文界面，支持中/英切换，数据库字段值可通过「语言管理」维护翻译。并提供 **backup.py / restore.py / reset_empty.py** 三个运维脚本做整库快照、一键回滚与空白起步。
 
 ## 技术栈
 
@@ -58,7 +58,8 @@ python -m venv .venv
 | 角色 | 账号 | 密码 | 说明 |
 |---|---|---|---|
 | 平台管理员 | ADMIN1 | admin123 | 全部后台，可代操作任一 BG 管理员 |
-| BG 管理员（Retail） | BGA1 | BGA1 | BG 视图、大表/通知信数据导入、通知信 |
+| BG 管理员（Retail + Commercial） | BGA1 | BGA1 | 同时管理两个 BG；BG 视图、导入、通知信 |
+| BG 管理员（Retail，与 BGA1 共管） | BGA2 | BGA2 | 演示一个 BG 可由多名 BG 管理员共管 |
 | 高层经理（Retail） | SM1 | SM1 | 团队含 N-1 ~ N-3 |
 | 经理（Retail） | M001 | M001 | 团队含 N-1 / N-2 |
 | 一线经理（Retail） | M003 | M003 | 直属 E001 / E002 |
@@ -75,6 +76,8 @@ python -m venv .venv
 - **版本化导入 + 一致即忽略**：每条导入数据自动生成时间戳与版本号；有工号按工号匹配、无工号按姓名匹配；重复导入生成新版本，系统始终调用最新（`is_current`）数据，旧版本锁定不可变；**与系统完全一致的数据静默忽略，不算错误**。
 - **软删除 + 留痕**：删除必须填写原因，逐条写入审计日志（`DataOpLog`），数据仅标记删除、不物理清除。
 - **员工信息**含部门（`department`）与职称（`job_title`）；用户管理页显示「信息更新时间」。
+- **BG 多对多**：一名 BG 管理员可管理多个 BG，一个 BG 也可由多名管理员共管（`UserManagedBg` 关联表）。BG 视图、导入模板、导出、通知信收件人都按管理员所辖 BG 集合并集过滤；BG 管理员姓名旁与页面标题会列出其全部所辖 BG。平台管理员可在「用户管理」页内联编辑每位 BG 管理员的所辖 BG 集合。
+- **员工信息版本化**：任何来源（大表导入 / 批量导入用户 / 内联编辑）改动员工信息前，先把旧信息快照成一条 `UserVersion`（`is_active=False`）封存留痕，再写入新值；个人页「信息变更历史」可查看历次快照。
 - **代操作留痕**：平台管理员代理 BG 管理员的开始与结束均写入审计日志（`op_type=PROXY`）。
 
 ## 界面语言
@@ -91,7 +94,11 @@ python -m venv .venv
    - 可下载模板：空白模板，或按**最近季度预填**（权限内、按 BG 范围）作为起点。
    - 两步式：上传 → **预览校验**（逐条标注 可导入 / 忽略 / 报错，并给出汇总）→ 确认执行。
    - 校验项：必填、`curve_name` 是否已存在、表内重复、员工不存在等；报错行可下载 **errors.csv** 修正后重传；**与系统完全一致的行自动忽略**（不算错误）。示例见 `sample_data/quarter_import.csv`。
-2. **通知信数据导入**（独立页面，BG 管理员 / 平台管理员）：表头同大表但**不含 `actual` 实绩列**，用于准备通知信所需的人员与计划数据。示例见 `sample_data/letter_data.csv`。
+2. **通知信数据导入**（独立页面，BG 管理员 / 平台管理员）：以**年度格式**传入通知信所需的人员与计划数据——每行一个 KPI，用 `year` 加四个 YTD 目标列（`ytd_q1~ytd_q4`）覆盖全年四个季度，系统自动按年度**展开成各季度计划**（空白季度跳过），复用大表的解析 / 最新覆盖 / 版本化流程。
+   - 表头：`year,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,curve_name,ytd_q1,ytd_q2,ytd_q3,ytd_q4`
+   - 可下载模板：空白模板，或按**最近年份预填**（把权限内该年各季度现有计划并排成四个 YTD 列）作为起点。
+   - 同样不含 `actual` 实绩列；两步式预览 → 确认执行。
+   - **与季度计算数据冲突自动拦截**：当展开后的「期间 + 员工 + 计划 + KPI」在系统里已有当期计划、且目标值不同，预览阶段即把该行标记为「与季度计算数据冲突」并拒绝写入（季度计算数据为准），第二遍执行也再次校验确保不落库；非冲突行照旧最新版本覆盖。冲突行可下载**冲突清单 CSV**（`/letters/data/conflicts.csv`），逐行标注季度现有值与通知信传入值，便于人工核对。示例见 `sample_data/letter_data.csv`。
 3. **Curve 管理**：分段线性插值点 `达成率%:支付率%`（如 `0:0,80:50,100:100,150:200`），可设封顶；区间外按端点取值（不外推）。页面展示每段的区间斜率。
 4. **两步式触发计算**（后台 → 触发计算）：
    - 第一步：上传计算清单（表头 `period,employee_id,name,plan_name,action`，每行 `action` 填「计算」，可按季度下载模板）→ 系统校验并展示预览（可计算 / 无计划 / 已封存 / 员工不存在）。
@@ -111,12 +118,13 @@ python -m venv .venv
 
 - **员工（我的奖金）**：按年度查看，Q1–Q4 四季度横向排布；未计算的季度留空但显示目标。每个计划展示各 KPI 的目标/达成率/支付率，以及 **加权支付率、特殊调整、季度总支付率**（不再展示未加权支付率）。年度下拉仅可选当前与上一年度。页头显示部门与职称。
 - **经理（团队）**：可见向下最多 5 层的整个团队，每人标注相对层级（直属为 N-1，其下属为 N-2，依此类推）；支持按层级筛选（如只看 N-3）、按工号/总支付率排序，并显示团队平均总支付率。
-- **BG 管理员（BG 视图）**：本 BG 全员当期结果（含部门/职称）与平均总支付率，可下载本 BG 的**两张表**（总支付率 + 各 KPI 明细）。
+- **BG 管理员（BG 视图）**：所辖 BG 集合（可多个）全员当期结果（含部门/职称）与平均总支付率，页面标题列出全部所辖 BG，可下载本范围的**两张表**（总支付率 + 各 KPI 明细）。
 
-## 通知信（BG 管理员）
+## 通知信（BG 管理员 / 平台管理员）
 
-- 收件人以列表选择：支持**筛选**（按姓名/工号检索）、**全选**、**Shift+点击区间多选**，并实时显示已选人数。
-- 模板支持占位符 `{{NAME}} {{PERIOD}} {{MESSAGE}} {{PLAN_TABLE}} {{CURVE_SUMMARY}}`，可保存、编辑、另存为新模板。
+- 收件人以列表选择：支持**筛选**（按姓名/工号检索）、**全选**、**Shift+点击区间多选**，并实时显示已选人数。BG 管理员只能选所辖 BG 集合内的员工；平台管理员可对任意在职员工**群发**。
+- 占位符覆盖数据表全部字段：`{{NAME}} {{EMPLOYEE_ID}} {{EMAIL}} {{BG}} {{DEPARTMENT}} {{JOB_TITLE}} {{MANAGER}} {{PERIOD}} {{PLAN_NAME}} {{MESSAGE}} {{PLAN_TABLE}} {{PERFORMANCE_TABLE}} {{CURVE_SUMMARY}}`。其中 **`{{PLAN_TABLE}}`（计划结构：KPI / 权重 / 目标 / Curve，不含实绩）** 与 **`{{PERFORMANCE_TABLE}}`（绩效明细：目标 / 实绩 / 达成率 / Curve / 原始支付率 / 加权贡献 + 加权支付率与季度总支付率汇总）** 是两张独立表格，可分别放入正文。
+- **全局（Global）模板**：平台管理员可建 `bg=Global` 的模板，所有 BG 管理员都能查看、套用并「另存为新模板」派生自己的版本，但**不能直接改写**原始 Global 模板。
 - **Curve 在信中以表格呈现**：每条 Curve 按区间列出「达成率范围 → 支付率范围」及**区间斜率**，并注明封顶与否；帮助员工理解「完成多少、支付多少」。
 - 信件以 HTML 发出，正文附已阅链接；平台记录发出时间、已阅时间、所用模板。
 - **仅收件人本人（或邮件链接的匿名访问者）可确认已阅**；管理员打开信件只能预览、不能代为确认。页面仅一个「确认已阅」按钮。
@@ -130,6 +138,23 @@ set SMTP_HOST=smtp.example.com& SMTP_PORT=587& SMTP_USER=...& SMTP_PASSWORD=...&
 ```
 
 （Linux/macOS 用 `export`。）`BASE_URL` 用于生成已阅链接。
+
+## 运维：备份 / 还原 / 空白起步
+
+三个命令行脚本，无需进界面即可完成整库快照与回滚（均使用 SQLite 在线备份 API，服务器运行时也能取到一致快照）：
+
+```bash
+.venv/Scripts/python backup.py                      # 生成一次快照到 backups/<时间戳>/
+.venv/Scripts/python backup.py before-q3-import     # 带人工标签，便于日后按名还原
+.venv/Scripts/python restore.py latest              # 一键还原到最近一次快照
+.venv/Scripts/python restore.py before-q3-import    # 按标签还原（也可用时间戳目录名）
+.venv/Scripts/python restore.py latest --yes        # 跳过交互确认
+.venv/Scripts/python reset_empty.py                 # 清空成全空库，仅留一个平台管理员
+```
+
+- **backup.py**：把 `app.db` 的一致副本、会话签名密钥 `secret.key`、本地发件箱一并写入带时间戳的快照目录，并生成 `manifest.json`（记录时间、标签、Git 版本、完整性校验、各表行数）。滚动保留最近 N 份（默认 20，`--keep` 或 `BACKUP_KEEP` 覆盖），超出部分移动到回收站而非硬删。
+- **restore.py**：还原前先校验快照完整性，并**自动对当前状态做一次“还原前”快照**（误还原也可再回退）；若检测到代码版本与快照不一致（本项目无迁移机制）会警告并要求确认；Windows 上服务器会锁定 SQLite 文件，脚本会检测到并提示先停服务，绝不半途覆盖。
+- **reset_empty.py**：删除并重建空表，仅插入一个平台管理员（默认 `ADMIN1/admin123`，可用环境变量 `ADMIN_ID/ADMIN_NAME/ADMIN_EMAIL/ADMIN_PW` 覆盖），供从零手动录入验证。
 
 ## 计算规则
 
@@ -149,19 +174,23 @@ set SMTP_HOST=smtp.example.com& SMTP_PORT=587& SMTP_USER=...& SMTP_PASSWORD=...&
 taskkill //F //IM python.exe                    # 释放 SQLite 占用（git bash 用双斜杠）
 .venv/Scripts/python seed.py                    # 重建演示库
 .venv/Scripts/python run.py > server.log 2>&1 &  # 后台启动 http://127.0.0.1:8000
-.venv/Scripts/python tests/test_e2e.py         # 端到端 22 步（需活服务器）
+.venv/Scripts/python tests/test_e2e.py         # 端到端 28 步（需活服务器）
 .venv/Scripts/python seed.py                    # 测完重新 seed，清掉测试污染的数据
 ```
 
-端到端 22 步覆盖：季度大表导入 / 通知信数据导入 / Curve / 两步式计算 / 单人与批量调整 / 数据删除 / 封存 / 两张表导出与筛选 / 语言管理 / 中英切换 / 多层团队 / 四季度 / 代操作（proxy）/ 批量导入用户 / 已阅追踪。
+端到端 28 步覆盖：季度大表导入 / 通知信数据导入（含年度格式、YTD 列展开、与季度计算冲突拦截与冲突清单导出）/ Curve / 两步式计算 / 单人与批量调整 / 数据删除 / 封存 / 两张表导出与筛选 / BG 多对多与共管 / 代操作（proxy）/ Global 模板与计划-绩效两张表占位符 / 语言管理 / 中英切换 / 多层团队 / 四季度 / 批量导入用户 / 员工信息版本化封存 / 所辖 BG 重新同步 / 已阅追踪。
 
 ```
 app/            应用代码（db/models/curves/calc/csvio/i18n/mailer/security/deps/routers/templates）
 data/           SQLite 数据库、密钥、本地发件箱（运行生成，已在 .gitignore 排除）
-sample_data/    示例 CSV：quarter_import.csv（季度大表）/ letter_data.csv（通知信数据）/ users_import.csv（批量导入用户）
-tests/          test_calc.py（离线引擎单测）+ test_e2e.py（端到端 22 步，需活服务器）
+backups/        backup.py 生成的整库快照（已在 .gitignore 排除）
+sample_data/    示例 CSV：quarter_import.csv（季度大表）/ letter_data.csv（通知信·年度格式）/ users_import.csv（批量导入用户）
+tests/          test_calc.py（离线引擎单测）+ test_e2e.py（端到端 28 步，需活服务器）
 seed.py         演示数据种子脚本（重建库，含演示翻译词条）
 run.py          开发服务器入口
+backup.py       整库快照（DB + 密钥 + 发件箱 + manifest），滚动保留
+restore.py      一键还原到任一快照（还原前自动再快照一次）
+reset_empty.py  清空为空白库、仅留一个平台管理员
 ```
 
 ## 设计取舍与后续迭代方向（MVP 边界）

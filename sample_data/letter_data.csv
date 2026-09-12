@@ -1,5 +1,5 @@
-period,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,quota,curve_name
-2027-Q1,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,1200000,Standard Curve
-2027-Q1,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve
-2027-Q1,E002,李娜,,,,,,,Sales Incentive,Revenue,60,1100000,Standard Curve
-2027-Q1,E002,李娜,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve
+year,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,curve_name,ytd_q1,ytd_q2,ytd_q3,ytd_q4
+2027,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,Standard Curve,1200000,2400000,3600000,4800000
+2027,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,90,90,90
+2027,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,Standard Curve,1100000,2200000,3300000,4400000
+2027,E002,李娜,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,90,90,90
