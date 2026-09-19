@@ -254,3 +254,14 @@ Finally, I certainly have my biases. If you've read this far, I'm deeply gratefu
 最后，我肯定是有我的偏见，如果你都看到这里了，我很感谢，同时也希望你能给我建议，提出不同观点或指出我的可能错误。
 
 </details>
+
+## ☕ Support This Project
+
+If this project helps you or you like my story “very much”, consider supporting its development and, mm... me:D.  
+如果这个项目对你有“很大”帮助或者你“很喜欢”我的故事，欢迎支持它的持续维护还有...我:D。
+
+- 🌍 PayPal: https://paypal.me/buckwheat123123
+- 🐙 GitHub Sponsors: (coming soon)
+
+> ⚠️ This is a voluntary donation, not a commercial transaction.  
+> 此为自愿赞助，不属于商业交易行为。
