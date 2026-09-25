@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenIncentive v4.2 · 项目分析图解</title>
+<style>
+  :root {
+    --bg: #f5f7fb;
+    --surface: #ffffff;
+    --surface-2: #fafbfd;
+    --border: #e3e8f0;
+    --text: #1f2937;
+    --text-soft: #6b7280;
+    --accent: #1e5aa8;
+    --accent-2: #0ea5a4;
+    --warn: #b45309;
+    --danger: #b91c1c;
+    --ok: #15803d;
+    --code-bg: #f3f4f6;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.55; }
+  header.site {
+    background: linear-gradient(135deg, #1e5aa8 0%, #0ea5a4 100%);
+    color: white; padding: 40px 32px 32px;
+  }
+  header.site h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: 0.5px; }
+  header.site .sub { opacity: 0.92; font-size: 15px; }
+  header.site .badges { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge {
+    background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.32);
+    padding: 4px 10px; border-radius: 999px; font-size: 12px; font-family: "Consolas", "Menlo", monospace;
+  }
+  .container { max-width: 1240px; margin: 0 auto; padding: 32px 24px 80px; }
+  section { margin-bottom: 44px; }
+  h2 {
+    font-size: 22px; margin: 0 0 4px; color: var(--accent);
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .num {
+    display: inline-flex; width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent); color: white; align-items: center; justify-content: center;
+    font-size: 14px; font-family: "Consolas", monospace;
+  }
+  h2 + p.lead { margin: 6px 0 22px; color: var(--text-soft); font-size: 14px; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; transition: all 0.15s ease; position: relative; overflow: hidden;
+  }
+  .card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(30,90,168,0.08); transform: translateY(-1px); }
+  .card h3 { margin: 0 0 6px; font-size: 15px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+  .card .tag {
+    display: inline-block; background: rgba(14,165,164,0.12); color: var(--accent-2);
+    padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;
+  }
+  .card ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--text); }
+  .card ul li { margin: 2px 0; }
+  .card .desc { font-size: 13px; color: var(--text-soft); margin: 4px 0 8px; }
+
+  /* Pipeline */
+  .pipeline {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px; overflow-x: auto;
+  }
+  .pipe-row { display: flex; align-items: center; gap: 8px; min-width: 900px; margin-bottom: 20px; }
+  .step {
+    flex: 1 1 0; min-width: 110px; background: linear-gradient(180deg, #fff 0%, #f7fafd 100%);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; text-align: center;
+    font-size: 13px; position: relative; transition: all 0.15s;
+  }
+  .step:hover { border-color: var(--accent); }
+  .step .role {
+    display: inline-block; font-size: 10px; color: white; background: var(--accent);
+    padding: 1px 6px; border-radius: 3px; margin-bottom: 4px;
+  }
+  .step .role.bg { background: #0ea5a4; }
+  .step .role.emp { background: #7c3aed; }
+  .step .role.sys { background: #64748b; }
+  .step .role.mgr { background: #b45309; }
+  .step strong { display: block; font-size: 13px; margin-top: 2px; color: var(--text); }
+  .step small { display: block; font-size: 11px; color: var(--text-soft); margin-top: 2px; }
+  .arrow { color: var(--text-soft); font-size: 20px; padding: 0 4px; user-select: none; }
+  .lane-label {
+    font-size: 12px; color: var(--text-soft); font-weight: 600; min-width: 68px;
+    padding-right: 12px; text-align: right; letter-spacing: 0.4px;
+  }
+
+  /* Code tree */
+  .tree {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px 24px; font-family: "Consolas", "Menlo", "Courier New", monospace;
+    font-size: 13px; line-height: 1.9; overflow-x: auto;
+  }
+  .tree .folder { color: var(--accent); font-weight: 600; }
+  .tree .file { color: var(--text); }
+  .tree .cm { color: var(--text-soft); font-style: normal; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; margin-left: 12px; }
+  .tree .hl { background: #fef3c7; padding: 0 4px; border-radius: 3px; }
+  .tree details { margin: 0; padding: 0; }
+  .tree summary { cursor: pointer; list-style: none; }
+  .tree summary::-webkit-details-marker { display: none; }
+  .tree .branch { padding-left: 22px; border-left: 1px dashed var(--border); margin-left: 6px; }
+
+  /* ER Diagram */
+  .er-wrap {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; overflow-x: auto;
+  }
+  .er-wrap svg { display: block; margin: 0 auto; }
+  .er-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 12px; color: var(--text-soft); padding: 8px 12px; background: var(--surface-2); border-radius: 6px; }
+  .er-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+
+  /* Rules */
+  .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .rule {
+    background: var(--surface); border-left: 4px solid var(--accent-2); border-radius: 6px;
+    padding: 12px 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  }
+  .rule .k { font-weight: 600; color: var(--accent); font-size: 13px; margin-bottom: 4px; }
+  .rule .v { font-size: 13px; color: var(--text); }
+  .rule code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .rule.warn { border-left-color: var(--warn); }
+  .rule.warn .k { color: var(--warn); }
+  .rule.danger { border-left-color: var(--danger); }
+  .rule.danger .k { color: var(--danger); }
+
+  /* Footer */
+  footer {
+    text-align: center; padding: 24px; color: var(--text-soft); font-size: 12px;
+    border-top: 1px solid var(--border); margin-top: 20px;
+  }
+  footer a { color: var(--accent); }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+  .kv .item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+  .kv .item .lbl { font-size: 11px; color: var(--text-soft); letter-spacing: 0.5px; text-transform: uppercase; }
+  .kv .item .val { font-size: 15px; font-weight: 600; color: var(--text); margin-top: 2px; }
+  @media (max-width: 720px) {
+    header.site { padding: 24px 20px; }
+    header.site h1 { font-size: 22px; }
+    .container { padding: 20px 16px; }
+    h2 { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <h1>OpenIncentive · 项目分析图解</h1>
+  <div class="sub">奖金计算与沟通平台 · v4.2 · 2026-09-25 快照</div>
+  <div class="badges">
+    <span class="badge">FastAPI</span>
+    <span class="badge">SQLAlchemy 2.x</span>
+    <span class="badge">SQLite</span>
+    <span class="badge">Jinja2 SSR</span>
+    <span class="badge">itsdangerous cookie session</span>
+    <span class="badge">PBKDF2</span>
+    <span class="badge">i18n zh/en</span>
+    <span class="badge">无外部服务依赖</span>
+  </div>
+</header>
+
+<div class="container">
+
+<!-- =================== 1. 概览指标 =================== -->
+<section>
+  <h2><span class="num">01</span>版本快照 & 核心指标</h2>
+  <p class="lead">在 v4.1 基础上的一次收敛性调整（F1~F6）：重排计算触发 / 通知信导入 / 计划命名 / 模板协作 / 预填导出五处口径与权限，并修复「已计算显示未计算」缺陷。当前 e2e 覆盖 33 步全绿。</p>
+  <div class="kv">
+    <div class="item"><div class="lbl">当前版本</div><div class="val">v4.2</div></div>
+    <div class="item"><div class="lbl">主要角色</div><div class="val">ADMIN / BG_ADMIN / MANAGER / EMPLOYEE</div></div>
+    <div class="item"><div class="lbl">本版特性</div><div class="val">F1~F6（6 项）</div></div>
+    <div class="item"><div class="lbl">数据实体</div><div class="val">15 张表</div></div>
+    <div class="item"><div class="lbl">e2e 步数</div><div class="val">33 全绿</div></div>
+    <div class="item"><div class="lbl">运维脚本</div><div class="val">backup / restore / reset_empty / seed</div></div>
+  </div>
+</section>
+
+<!-- =================== 2. 功能矩阵 =================== -->
+<section>
+  <h2><span class="num">02</span>项目功能矩阵</h2>
+  <p class="lead">五大能力域覆盖「导入 → 计算 → 沟通 → 归档 → 运维」全链路。</p>
+  <div class="card-grid">
+    <div class="card">
+      <h3>① 数据导入 <span class="tag">版本化</span></h3>
+      <p class="desc">季度大表 + 年度通知信数据 + 用户花名册，三张核心表。</p>
+      <ul>
+        <li>季度大表：一张 CSV 覆盖员工/KPI/目标/实绩/Curve，逐行校验</li>
+        <li>表内后行覆盖前行（latest-wins），员工信息合并跨行</li>
+        <li><b>F5</b> 计划名唯一化：同组合并入既有名，同名不同组合自动加 <code>_vN</code></li>
+        <li>同表新建上级 + ADMIN 代理回退</li>
+        <li>员工身份字段变更 → 旧记录封存为 UserVersion</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>② 冲突 & 权重拦截 <span class="tag">E2b / F1</span></h3>
+      <p class="desc">通知信数据 vs 季度计算数据的一致性守门 + 权重完整性。</p>
+      <ul>
+        <li>展开后 (period, employee, plan, KPI) 与 current BonusPlan 目标比对</li>
+        <li>预览即标记「与季度计算数据冲突」并拦截；计算数据为权威</li>
+        <li>独立 <code>conflicts.csv</code>：四个 existing_qN 列 + 逐季 old vs new</li>
+        <li><b>F1</b> 通知信任一计划权重≠100% → 整员工全部行拒绝（计算大表不受限）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>③ 计算引擎 <span class="tag">一键</span></h3>
+      <p class="desc">Curve 配置 + 一键触发计算 + 调整封存。</p>
+      <ul>
+        <li>Curve 达成率→支付率映射表由管理员配置</li>
+        <li><b>F3</b> 移除两步式 CSV 触发计算，统一为选期间一键触发生成 CalcRun</li>
+        <li><b>F2</b> 视图取该期间「所有批次」中每人每计划最新结果 → 封存后再算不清空</li>
+        <li>特殊调整（单人 / CSV 批量 / 增量 / 留痕）· 多 BG 一键封存</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>④ 通知信 <span class="tag">E1 / F4</span></h3>
+      <p class="desc">全员共享模板 + 计划/绩效两张表占位符。</p>
+      <ul>
+        <li><b>F4</b> 模板在所有 ADMIN 与 BG_ADMIN 间共享可见（含 Global），列表显示创建者 / 我的 / 只读</li>
+        <li><b>F4</b> 他人模板只读，可「复制并编辑」派生归自己的副本（加「（副本）」后缀）</li>
+        <li><b>F4</b> 创建者删自己的、平台 ADMIN 可删任意模板</li>
+        <li><code>PLAN_TABLE</code> 仅结构 · <code>PERFORMANCE_TABLE</code> 逐 KPI 明细；已阅追踪 · ADMIN 群发</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>⑤ 角色视图 <span class="tag">分区</span></h3>
+      <p class="desc">同一份数据，四种视角。</p>
+      <ul>
+        <li>员工：个人奖金、KPI 明细、通知信</li>
+        <li>多层经理：可管理下属链，逐层可见</li>
+        <li>BG 管理员：多对多管理多个 BG，成员合并视图</li>
+        <li>平台 ADMIN：跨 BG + 代操作（代理 BG 管理员）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>⑥ 导出 & 归档 <span class="tag">双表 / F6</span></h3>
+      <p class="desc">总支付率表 + 各 KPI 明细表 + 季度预填大表，CSV 带 UTF-8 BOM。</p>
+      <ul>
+        <li>跨批次取 (员工, 计划) 最新结果，封存记录不丢失</li>
+        <li><b>F6</b> 后台可按指定季度导出权限内预填大表，供业务分析 / 下季改写再上传</li>
+        <li>新增 <code>sealed</code> 列 + <code>weighted_contribution_pct</code></li>
+        <li>软删除（is_deleted） + 版本（is_current） + DataOpLog 留痕</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>⑦ 业务连续性 <span class="tag">运维</span></h3>
+      <p class="desc">整库快照、一键回滚、空白起步。</p>
+      <ul>
+        <li>backup.py：SQLite 在线备份 API，服务器运行中可安全拷贝</li>
+        <li>manifest 含 git rev / 完整性 / 各表行数</li>
+        <li>restore.py：还原前自动再做一次快照 + 漂移警告 + 服务锁检测</li>
+        <li>reset_empty.py：空 schema + 一个 ADMIN，用于演示与排错</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>⑧ 双语 & 翻译 <span class="tag">i18n</span></h3>
+      <p class="desc">界面 + 数据字段值双层翻译。</p>
+      <ul>
+        <li><code>Translator.t()</code> 静态字符串（支持命名占位符）</li>
+        <li><code>Translator.tl()</code> 数据库字段值翻译（如 BG 名）</li>
+        <li>语言管理页维护 Label 表 · 无 locale 文件</li>
+        <li>CSV 响应统一加 <code>\ufeff</code> BOM 保证 Excel 中文不乱码</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =================== 3. 运行流程 =================== -->
+<section>
+  <h2><span class="num">03</span>端到端运行流程</h2>
+  <p class="lead">按角色泳道划分，展示一次完整季度周期内的数据流动与关键节点。</p>
+  <div class="pipeline">
+
+    <div class="pipe-row">
+      <div class="lane-label">平台 ADMIN</div>
+      <div class="step"><span class="role">配置</span><strong>Curve 表</strong><small>达成率 → 支付率映射</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role">导入</span><strong>季度大表</strong><small>员工+KPI+实绩 · F5 计划名唯一</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role">校验</span><strong>预览逐行</strong><small>可导入/忽略/报错 · 不落库</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role">提交</span><strong>一键触发计算</strong><small>F3 · 生成 CalcRun</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role">微调</span><strong>特殊调整</strong><small>单人 / CSV 批量</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role">锁定</span><strong>封存</strong><small>多 BG 一键 · 不可改</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role sys">交付</span><strong>双表 + F6 预填导出</strong><small>总支付率 + KPI 明细</small></div>
+    </div>
+
+    <div class="pipe-row">
+      <div class="lane-label">BG 管理员</div>
+      <div class="step"><span class="role bg">导入</span><strong>年度通知信数据</strong><small>year + ytd_q1~q4</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role bg">拦截</span><strong>冲突 + F1 权重校验</strong><small>≠100% 整员工拒绝</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role bg">下载</span><strong>conflicts.csv</strong><small>修复后重传</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role bg">执行</span><strong>展开为季度计划</strong><small>最新覆盖 + 版本化</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role bg">沟通</span><strong>F4 共享模板 / 群发</strong><small>只读 / 复制并编辑</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role bg">跟踪</span><strong>已阅状态</strong><small>letter log</small></div>
+    </div>
+
+    <div class="pipe-row">
+      <div class="lane-label">经理 / 员工</div>
+      <div class="step"><span class="role mgr">查看</span><strong>团队视图</strong><small>逐层可见下属</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role emp">登录</span><strong>个人页</strong><small>员工 / 上级</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role emp">明细</span><strong>KPI 达成率与支付率</strong><small>逐 KPI 加权贡献</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role emp">沟通</span><strong>查看通知信</strong><small>HTML 邮件 + Curve 区间表</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role emp">回执</span><strong>标记已阅</strong><small>反馈给 BG 管理员</small></div>
+    </div>
+
+    <div class="pipe-row">
+      <div class="lane-label">系统留痕</div>
+      <div class="step"><span class="role sys">审计</span><strong>DataOpLog</strong><small>每次导入 / 调整 / 封存 / 群发</small></div>
+      <span class="arrow">·</span>
+      <div class="step"><span class="role sys">版本</span><strong>is_current + imported_at</strong><small>历史版本可追溯</small></div>
+      <span class="arrow">·</span>
+      <div class="step"><span class="role sys">快照</span><strong>UserVersion</strong><small>员工信息变更前后</small></div>
+      <span class="arrow">·</span>
+      <div class="step"><span class="role sys">备份</span><strong>backup.py</strong><small>在线备份 + 滚动保留</small></div>
+      <span class="arrow">·</span>
+      <div class="step"><span class="role sys">还原</span><strong>restore.py</strong><small>还原前自动再快照</small></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- =================== 4. 数据模型 =================== -->
+<section>
+  <h2><span class="num">04</span>数据模型与关系</h2>
+  <p class="lead">15 张表，无外键级联、以软删除与版本字段维护历史；BG 多对多以关联表实现。</p>
+  <div class="er-wrap">
+  <svg viewBox="0 0 1160 620" width="100%" style="min-width: 1100px;">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+      </marker>
+      <style>
+        .ent { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; rx: 6; }
+        .ent-core { stroke: #1e5aa8; stroke-width: 1.6; fill: #eef4fb; }
+        .ent-audit { stroke: #b45309; stroke-width: 1.4; fill: #fef8ec; }
+        .ent-letter { stroke: #0ea5a4; stroke-width: 1.4; fill: #e6faf8; }
+        .ent-user { stroke: #7c3aed; stroke-width: 1.4; fill: #f5edfd; }
+        .lbl { font: 12.5px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #1f2937; }
+        .lbl-t { font: 600 13px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+        .lbl-c { fill: #1e5aa8; }
+        .lbl-a { fill: #b45309; }
+        .lbl-l { fill: #0ea5a4; }
+        .lbl-u { fill: #7c3aed; }
+        .edge { stroke: #94a3b8; stroke-width: 1.2; fill: none; }
+        .edge-lbl { font: 11px -apple-system, "Segoe UI", sans-serif; fill: #64748b; }
+      </style>
+    </defs>
+
+    <!-- User cluster (top-left) -->
+    <g>
+      <rect class="ent ent-user" x="30" y="30" width="180" height="70"/>
+      <text class="lbl lbl-t lbl-u" x="45" y="52">User</text>
+      <text class="lbl" x="45" y="72">emp_id · name · role</text>
+      <text class="lbl" x="45" y="88">bg (primary) · manager_id</text>
+    </g>
+    <g>
+      <rect class="ent ent-user" x="30" y="130" width="180" height="55"/>
+      <text class="lbl lbl-t lbl-u" x="45" y="152">UserManagedBg</text>
+      <text class="lbl" x="45" y="170">user_id ↔ bg  ·  多对多</text>
+    </g>
+    <g>
+      <rect class="ent ent-user" x="30" y="205" width="180" height="55"/>
+      <text class="lbl lbl-t lbl-u" x="45" y="227">UserVersion</text>
+      <text class="lbl" x="45" y="245">旧信息快照 · is_active=False</text>
+    </g>
+    <path class="edge" d="M210 65 L320 65" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="220" y="55">n:m 关联</text>
+    <path class="edge" d="M120 100 L120 130" marker-end="url(#arr)"/>
+    <path class="edge" d="M120 185 L120 205" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="126" y="199">覆盖前归档</text>
+
+    <!-- Plan cluster (top-center) -->
+    <g>
+      <rect class="ent ent-core" x="340" y="30" width="200" height="70"/>
+      <text class="lbl lbl-t lbl-c" x="355" y="52">BonusPlan</text>
+      <text class="lbl" x="355" y="72">period (year-Qn) · emp_id</text>
+      <text class="lbl" x="355" y="88">plan_name（F5 按组合唯一）· is_current</text>
+    </g>
+    <g>
+      <rect class="ent ent-core" x="340" y="130" width="200" height="65"/>
+      <text class="lbl lbl-t lbl-c" x="355" y="152">PlanKpi</text>
+      <text class="lbl" x="355" y="172">kpi_name · weight_pct · quota</text>
+      <text class="lbl" x="355" y="188">curve_name · is_deleted</text>
+    </g>
+    <g>
+      <rect class="ent ent-core" x="340" y="225" width="200" height="55"/>
+      <text class="lbl lbl-t lbl-c" x="355" y="247">Curve</text>
+      <text class="lbl" x="355" y="265">达成率 → 支付率 · 管理员配置</text>
+    </g>
+    <path class="edge" d="M440 100 L440 130" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="446" y="123">1:N</text>
+    <path class="edge" d="M440 225 L440 195" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="446" y="215">引用</text>
+
+    <!-- Actual + Calc (right of plan) -->
+    <g>
+      <rect class="ent ent-core" x="590" y="130" width="200" height="65"/>
+      <text class="lbl lbl-t lbl-c" x="605" y="152">Actual</text>
+      <text class="lbl" x="605" y="172">per-KPI 实绩 · imported_at</text>
+      <text class="lbl" x="605" y="188">latest-wins</text>
+    </g>
+    <g>
+      <rect class="ent ent-core" x="590" y="30" width="200" height="70"/>
+      <text class="lbl lbl-t lbl-c" x="605" y="52">CalcRun</text>
+      <text class="lbl" x="605" y="72">批次 · 状态 · 操作者</text>
+      <text class="lbl" x="605" y="88">一键触发 · F2 视图取全部批次最新</text>
+    </g>
+    <g>
+      <rect class="ent ent-core" x="590" y="225" width="200" height="65"/>
+      <text class="lbl lbl-t lbl-c" x="605" y="247">BonusResult</text>
+      <text class="lbl" x="605" y="265">员工 × 计划 最终支付率</text>
+      <text class="lbl" x="605" y="281">Σ(weight% × rate) ÷ 100</text>
+    </g>
+    <path class="edge" d="M540 165 L590 165" marker-end="url(#arr)"/>
+    <path class="edge" d="M690 100 L690 130" marker-end="url(#arr)"/>
+    <path class="edge" d="M690 195 L690 225" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="696" y="218">计算输出</text>
+
+    <!-- Adjustment + Lock + DataOpLog (audit row) -->
+    <g>
+      <rect class="ent ent-audit" x="840" y="30" width="200" height="55"/>
+      <text class="lbl lbl-t lbl-a" x="855" y="52">Adjustment</text>
+      <text class="lbl" x="855" y="70">单人 / 批量增量 · 留痕</text>
+    </g>
+    <g>
+      <rect class="ent ent-audit" x="840" y="105" width="200" height="55"/>
+      <text class="lbl lbl-t lbl-a" x="855" y="127">Lock</text>
+      <text class="lbl" x="855" y="145">多 BG 一键封存 · 阻断写入</text>
+    </g>
+    <g>
+      <rect class="ent ent-audit" x="840" y="180" width="200" height="55"/>
+      <text class="lbl lbl-t lbl-a" x="855" y="202">DataOpLog</text>
+      <text class="lbl" x="855" y="220">每一次改动都落审计</text>
+    </g>
+    <path class="edge" d="M790 65 L840 65" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="795" y="58">覆盖</text>
+
+    <!-- Letter cluster -->
+    <g>
+      <rect class="ent ent-letter" x="290" y="340" width="220" height="70"/>
+      <text class="lbl lbl-t lbl-l" x="305" y="362">LetterTemplate</text>
+      <text class="lbl" x="305" y="380">F4 全员共享 · 创建者 created_by</text>
+      <text class="lbl" x="305" y="396">只读 / 复制并编辑 / ADMIN 删任意</text>
+    </g>
+    <g>
+      <rect class="ent ent-letter" x="560" y="340" width="220" height="70"/>
+      <text class="lbl lbl-t lbl-l" x="575" y="362">Letter</text>
+      <text class="lbl" x="575" y="380">收件人 · 期间 · 正文 · 已阅</text>
+      <text class="lbl" x="575" y="396">PLAN_TABLE / PERFORMANCE_TABLE</text>
+    </g>
+    <path class="edge" d="M510 375 L560 375" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="515" y="368">渲染</text>
+    <path class="edge" d="M450 340 L450 290" marker-end="url(#arr)"/>
+    <text class="edge-lbl" x="456" y="315">取数</text>
+
+    <!-- Label (bottom-right) -->
+    <g>
+      <rect class="ent" x="840" y="340" width="200" height="55"/>
+      <text class="lbl lbl-t" x="855" y="362">Label</text>
+      <text class="lbl" x="855" y="380">DB 字段值翻译（BG 名等）</text>
+    </g>
+
+    <!-- User to Plan / Result -->
+    <path class="edge" d="M210 65 L340 65" marker-end="url(#arr)"/>
+
+    <!-- Legend box -->
+    <g transform="translate(30, 450)">
+      <text class="lbl lbl-t" x="0" y="0" fill="#1f2937">图例</text>
+      <rect class="ent ent-user" x="0" y="12" width="14" height="14"/>
+      <text class="lbl" x="22" y="24">用户域 · User / UserManagedBg / UserVersion</text>
+      <rect class="ent ent-core" x="300" y="12" width="14" height="14"/>
+      <text class="lbl" x="322" y="24">计算域 · Plan / KPI / Actual / Curve / Calc / Result</text>
+      <rect class="ent ent-audit" x="640" y="12" width="14" height="14"/>
+      <text class="lbl" x="662" y="24">审计域 · Adjustment / Lock / DataOpLog</text>
+      <rect class="ent ent-letter" x="0" y="42" width="14" height="14"/>
+      <text class="lbl" x="22" y="54">沟通域 · LetterTemplate / Letter</text>
+      <rect class="ent" x="300" y="42" width="14" height="14"/>
+      <text class="lbl" x="322" y="54">辅助域 · Label（字段值翻译）</text>
+      <text class="lbl" x="640" y="54" fill="#64748b">所有表通用字段：version · is_current · is_deleted · imported_at</text>
+    </g>
+  </svg>
+  </div>
+</section>
+
+<!-- =================== 5. 代码结构 =================== -->
+<section>
+  <h2><span class="num">05</span>代码结构与模块职责</h2>
+  <p class="lead">单进程 FastAPI 应用，无外部服务依赖；模板与静态资源同仓维护；测试与样例数据随包发布。</p>
+  <div class="tree">
+    <div class="folder">OpenIncentive/</div>
+    <div class="branch">
+      <div><span class="file">app/</span><span class="cm"># FastAPI 主应用（无 ORM 迁移，靠 create_all 建表）</span></div>
+      <div class="branch">
+        <div><span class="file">main.py</span><span class="cm"># 应用装配 · 路由挂载 · session / locale 中间件</span></div>
+        <div><span class="file">models.py</span><span class="cm"># 15 张表的 SQLAlchemy 2.x Mapped[] 模型</span></div>
+        <div><span class="file">db.py</span><span class="cm"># Engine / SessionLocal / Base + create_all</span></div>
+        <div><span class="file">deps.py</span><span class="cm"># 依赖注入：current_user、bg_scope、bg_filter/bg_allowed</span></div>
+        <div><span class="file">security.py</span><span class="cm"># PBKDF2 口令哈希 + itsdangerous 签名 cookie 会话</span></div>
+        <div><span class="hl"><span class="file">csvio.py</span></span><span class="cm"># <b>核心：CSV 解析 / 冲突检测 / F1 权重100%校验 / F5 计划名唯一化 / 年度展开 / 版本化写入</b></span></div>
+        <div><span class="file">calc.py</span><span class="cm"># Curve 匹配 + 加权支付率 Σ(weight%×rate)÷100</span></div>
+        <div><span class="file">curves.py</span><span class="cm"># Curve 配置 CRUD 与区间解析</span></div>
+        <div><span class="hl"><span class="file">i18n.py</span></span><span class="cm"># <b>Translator：界面字符串 t() + DB 字段值翻译 tl() + 数字格式化</b></span></div>
+        <div><span class="file">mailer.py</span><span class="cm"># 邮件发送（本地 outbox 目录，无外部 SMTP）</span></div>
+        <div><span class="file">ui.py</span><span class="cm"># Jinja2 环境、模板辅助、分页 / 徽章</span></div>
+        <div><span class="file">routers/</span></div>
+        <div class="branch">
+          <div><span class="file">auth.py</span><span class="cm"># 登录 / 登出 / 语言切换</span></div>
+          <div><span class="hl"><span class="file">admin.py</span></span><span class="cm"># <b>ADMIN 全能力：导入 / 计算 / 调整 / 封存 / 导出 / 用户管理 / 代操作</b></span></div>
+          <div><span class="file">letters.py</span><span class="cm"># 通知信全流程：模板 / 年度数据导入 / 冲突清单 / 群发 / 查看 / 已阅</span></div>
+          <div><span class="file">views.py</span><span class="cm"># BG / 团队 / 个人页 · 角色分区</span></div>
+        </div>
+        <div><span class="file">templates/</span><span class="cm"># Jinja2 服务端模板</span></div>
+        <div class="branch">
+          <div><span class="file">base.html · login.html · import_preview.html</span></div>
+          <div><span class="file">admin/</span><span class="cm"># 后台页面：dashboard / import / adjust / curves / data / users / export / labels / run_detail / user_import_preview（F3 已移除 calc）</span></div>
+          <div><span class="file">letters/</span><span class="cm"># 7 个信件页：compose / templates / template_edit / <b>data</b> / log / view / not_found</span></div>
+          <div><span class="file">bg.html · team.html · person.html</span><span class="cm"># 角色视图</span></div>
+        </div>
+        <div><span class="file">static/style.css</span><span class="cm"># 全站唯一样式（无构建、无 CDN）</span></div>
+      </div>
+
+      <div style="margin-top: 6px;"><span class="file">tests/</span><span class="cm"># 两级测试</span></div>
+      <div class="branch">
+        <div><span class="file">test_calc.py</span><span class="cm"># 离线：Curve 匹配 + 加权口径（无需服务器）</span></div>
+        <div><span class="file">test_e2e.py</span><span class="cm"># 端到端 33 步：登录 / 导入(F5) / 冲突(F1) / 一键计算(F2) / 调整 / 封存 / 导出(F6) / 通知信 / 模板协作(F4) / 版本 / 多 BG</span></div>
+      </div>
+
+      <div style="margin-top: 6px;"><span class="file">sample_data/</span><span class="cm"># 演示数据（可上传）</span></div>
+      <div class="branch">
+        <div><span class="file">quarter_import.csv</span><span class="cm"># 季度大表示例</span></div>
+        <div><span class="file">letter_data.csv</span><span class="cm"># <b>年度格式通知信数据示例（v4.1 已改写）</b></span></div>
+        <div><span class="file">users_import.csv</span><span class="cm"># 员工花名册示例</span></div>
+      </div>
+
+      <div style="margin-top: 6px;"><span class="file">seed.py · run.py</span><span class="cm"># 造数据 / 启动 uvicorn</span></div>
+      <div><span class="hl"><span class="file">backup.py · restore.py · reset_empty.py</span></span><span class="cm"># <b>运维三件套：在线备份 / 一键回滚 / 空白起步</b></span></div>
+      <div><span class="file">README.md · CHANGELOG.md · LICENSE · requirements.txt · .gitignore</span></div>
+
+      <div style="margin-top: 6px; color: var(--text-soft);"><i>以下目录被 .gitignore 排除（运行时数据，绝不入库）：</i></div>
+      <div class="branch">
+        <div><code>data/</code><span class="cm">app.db · secret.key · outbox/</span></div>
+        <div><code>backups/</code><span class="cm">backup.py 生成的整库快照（含 DB 副本 + 密钥）</span></div>
+        <div><code>.venv/ · *.log · .trash/ · 命令行.txt</code><span class="cm">venv / 日志 / 回收站 / 本地笔记</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== 6. 关键规则 =================== -->
+<section>
+  <h2><span class="num">06</span>锁定规则与关键约束</h2>
+  <p class="lead">这些规则跨批次稳定生效，任何后续改动都需保持一致。</p>
+  <div class="rules">
+    <div class="rule">
+      <div class="k">加权支付率口径</div>
+      <div class="v"><code>weighted_rate = Σ(weight_pct / 100 × rate)</code>，按原状加权加总、<b>绝不归一化</b>；系统不提供未加权（简单平均）支付率。</div>
+    </div>
+    <div class="rule">
+      <div class="k">Plan vs Performance 两表拆分</div>
+      <div class="v"><code>PLAN_TABLE</code> 只呈现计划结构（KPI / 权重 / 目标 / Curve，<b>不含实绩与支付率</b>）；<code>PERFORMANCE_TABLE</code> 逐 KPI 呈现权重 / 目标 / 实绩 / 达成率 / Curve / 原始率 / 加权贡献。</div>
+    </div>
+    <div class="rule">
+      <div class="k">Latest-wins（表内后行覆盖前行）</div>
+      <div class="v">同一 <code>(期间 + 员工 + 计划 + KPI)</code> 重复行，后出现的行覆盖先前值，员工信息跨行合并。</div>
+    </div>
+    <div class="rule warn">
+      <div class="k">冲突处理权威源</div>
+      <div class="v">通知信数据 vs 季度计算数据：<b>以季度计算为准</b>。冲突行预览即拦截，执行二次校验确保不写入；提供 <code>conflicts.csv</code> 供用户修复原表后重传。</div>
+    </div>
+    <div class="rule">
+      <div class="k">BG 多对多</div>
+      <div class="v"><code>UserManagedBg</code> 关联表；<code>User.bg</code> 保留为主属 BG 以兼容既有分区逻辑；<code>bg_scope</code> 用 <code>lazy="selectin"</code>，Jinja 渲染不触发 MissingGreenlet。</div>
+    </div>
+    <div class="rule">
+      <div class="k">员工信息版本化</div>
+      <div class="v">覆盖身份字段前，先落一条停用的 <code>UserVersion</code>（新信息启用、旧信息停用封存）；<code>/person</code> 页向管理员开放历史。</div>
+    </div>
+    <div class="rule">
+      <div class="k">F5 计划名唯一化</div>
+      <div class="v">同一<b>期间内跨 BG 全局</b>，一套 <code>(KPI, Curve, 权重)</code> 组合只对应一个计划名（Quota 不计入）。同组合不同名 → 并入既有名并提示；同名不同组合 → 按传入顺序自动加 <code>_v1</code> / <code>_v2</code>。</div>
+    </div>
+    <div class="rule">
+      <div class="k">F1 通知信权重必须 100%</div>
+      <div class="v">通知信导入按 <code>(员工, 期间, 计划)</code> 汇总权重，任一计划合计≠100%（容差 1e-6）→ <b>整员工全部行拒绝、不导入</b>，其余员工照常。<b>计算大表不受此约束</b>（口径仍是加权加总、绝不归一化）。</div>
+    </div>
+    <div class="rule">
+      <div class="k">F2 视图取数范围</div>
+      <div class="v">BG / 团队 / 个人页取「同一期间、<b>所有批次</b>里每人每计划的最新结果」。因 <code>run_calculation</code> 即使跳过全部人已封存人员也会生成空批次，只看最新批次会导致已算人员被误显示「未计算」——故必须跨全部批次取最新。</div>
+    </div>
+    <div class="rule">
+      <div class="k">F4 模板共享协作</div>
+      <div class="v">通知信模板在 <b>所有 ADMIN 与 BG_ADMIN 之间完全共享可见</b>（含 <code>Global</code>）。他人模板<b>只读</b>，可「复制并编辑」派生归自己的副本（加「（副本）」后缀、落创建者主 BG）；<b>创建者删自己的、平台 ADMIN 可删任意</b>。</div>
+    </div>
+    <div class="rule">
+      <div class="k">F3 触发计算形态</div>
+      <div class="v">两步式 CSV 触发计算（<code>/admin/calc</code>）已<b>移除</b>，统一为选期间<b>一键触发</b>（<code>/admin/runs</code>）；导入的「预览 → 执行」两步式仍保留（那是校验，不是计算）。</div>
+    </div>
+    <div class="rule danger">
+      <div class="k">无迁移 · 需重建</div>
+      <div class="v">数据库以 <code>Base.metadata.create_all</code> 建表，<b>无 Alembic / 无迁移</b>——任何模型字段变更都需 <code>seed.py</code> 重建，或用 <code>reset_empty.py</code> 起空库。</div>
+    </div>
+    <div class="rule">
+      <div class="k">CSV BOM 强制</div>
+      <div class="v">所有 CSV 响应前置 <code>\ufeff</code> BOM 保证 Excel 中文不乱码；测试断言 <code>startswith</code> 前须 <code>lstrip("\ufeff")</code>。</div>
+    </div>
+    <div class="rule">
+      <div class="k">年度→季度展开</div>
+      <div class="v"><code>year_to_big_text()</code> 把一行年度数据展开为最多四行大表数据（<code>period=year-Qn</code>，<code>quota=ytd_qn</code>），空白季度跳过；对已是大表形状的输入原样透传。</div>
+    </div>
+    <div class="rule">
+      <div class="k">快照与还原</div>
+      <div class="v">restore 前 <b>自动再做一次快照</b>，错误的还原本身可撤销；备份含 DB 副本与签名密钥 → <code>backups/</code> 必须 gitignore。</div>
+    </div>
+    <div class="rule">
+      <div class="k">数据留痕</div>
+      <div class="v">所有导入 / 调整 / 封存 / 群发都写入 <code>DataOpLog</code>；软删除（<code>is_deleted</code>）+ 版本（<code>is_current</code>）+ <code>imported_at</code> 三件套贯穿全表。</div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== 7. 验证闭环 =================== -->
+<section>
+  <h2><span class="num">07</span>每个批次的验证闭环</h2>
+  <p class="lead">v4.2 每个批次都跑完这一圈才提交，保证 e2e 与真实运行路径同步。</p>
+  <div class="pipeline">
+    <div class="pipe-row">
+      <div class="lane-label">每批次</div>
+      <div class="step"><span class="role sys">1</span><strong>compileall</strong><small>语法自检</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role sys">2</span><strong>test_calc 离线</strong><small>Curve + 加权口径</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role sys">3</span><strong>taskkill python</strong><small>清残留服务</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role sys">4</span><strong>seed 重造数据</strong><small>create_all</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role sys">5</span><strong>后台启动 uvicorn</strong><small>cmd & 后台</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role sys">6</span><strong>test_e2e 全绿</strong><small>33 步</small></div>
+      <span class="arrow">→</span>
+      <div class="step"><span class="role sys">7</span><strong>taskkill + 干净 seed</strong><small>不留脏进程</small></div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== 8. 快速开始 =================== -->
+<section>
+  <h2><span class="num">08</span>快速开始</h2>
+  <div class="tree" style="font-size: 13px;">
+<pre style="margin: 0; font-family: inherit;"># 1) 建 venv + 装依赖
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+
+# 2) 造演示数据（含 BGA1 双 BG / BGA2 共管 / HR 越权探针）
+.venv\Scripts\python seed.py
+
+# 3) 启动
+.venv\Scripts\python run.py            # 或 uvicorn app.main:app --reload
+
+# 4) 访问
+#    http://127.0.0.1:8000  · 登录 ADMIN / admin123
+
+# 运维
+.venv\Scripts\python backup.py pre_release     # 快照
+.venv\Scripts\python restore.py latest         # 回滚
+.venv\Scripts\python reset_empty.py            # 空白起步
+
+# 测试
+.venv\Scripts\python tests\test_calc.py
+.venv\Scripts\python tests\test_e2e.py
+</pre>
+  </div>
+</section>
+
+<footer>
+  OpenIncentive v4.2 · 生成于 2026-09-25 · 快照基于 commit <code>e600635</code><br>
+  仓库：<a href="https://github.com/buckwheat123/OpenIncentive">github.com/buckwheat123/OpenIncentive</a> · 版本历史详见 <a href="../CHANGELOG.md">CHANGELOG.md</a>
+</footer>
+
+</div>
+</body>
+</html>
