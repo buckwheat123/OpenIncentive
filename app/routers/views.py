@@ -32,12 +32,21 @@ def latest_run(db, period: str) -> CalcRun | None:
 
 
 def result_for(db, uid: int, period: str, plan_name: str | None = None) -> BonusResult | None:
-    run = latest_run(db, period)
-    if not run:
-        return None
-    stmt = select(BonusResult).where(BonusResult.run_id == run.id, BonusResult.employee_id == uid)
+    """Latest result for an employee/plan ACROSS ALL runs of the period.
+
+    run_calculation SKIPS sealed (period, BG) scopes, so the newest run of a period may
+    omit people who were already calculated and then sealed. Reading only the latest run
+    made those sealed employees wrongly show as "未计算" (feature: BG/team/person views).
+    We therefore scan every run of the period and take the most recent result for this
+    employee (+ plan), matching the export-side _latest_results_by_period semantics."""
+    stmt = (
+        select(BonusResult)
+        .join(CalcRun, BonusResult.run_id == CalcRun.id)
+        .where(CalcRun.period == period, BonusResult.employee_id == uid)
+    )
     if plan_name:
         stmt = stmt.where(BonusResult.plan_name == plan_name)
+    stmt = stmt.order_by(CalcRun.created_at.desc(), CalcRun.id.desc(), BonusResult.id.desc())
     return db.scalars(stmt).first()
 
 

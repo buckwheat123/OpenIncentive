@@ -244,6 +244,8 @@ class LetterTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
+    creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
+
 
 class Letter(Base):
     __tablename__ = "letters"

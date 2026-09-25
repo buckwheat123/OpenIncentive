@@ -44,24 +44,25 @@ GLOBAL_BG = "Global"
 
 
 def _template_scope_clause(user: User):
-    """SQLAlchemy predicate: which LetterTemplate rows this actor may view.
-    ADMIN sees all; BG_ADMIN sees their managed BGs plus the platform-wide
-    Global templates authored by ADMIN (feature #10)."""
-    scope = _scope_bg(user)
-    if scope is None:
-        return None  # no filter
-    wanted = list(scope) + [GLOBAL_BG]
-    return LetterTemplate.bg.in_(wanted)
+    """F4: letter templates are shared across ALL admins (platform ADMIN and every
+    BG_ADMIN), so the list/compose scope is unfiltered. ``None`` means no WHERE clause."""
+    return None
 
 
 def _can_view_template(user: User, template: LetterTemplate) -> bool:
-    scope = _scope_bg(user)
-    return scope is None or template.bg in scope or template.bg == GLOBAL_BG
+    """Every allowed admin may open (view) any template — sharing is the whole point of F4."""
+    return True
 
 
 def _can_edit_template(user: User, template: LetterTemplate) -> bool:
-    scope = _scope_bg(user)
-    return scope is None or template.bg in scope
+    """F4: only the creator may edit a template in place. Anyone else sees it read-only
+    and must copy it first (which makes them the new creator)."""
+    return template.created_by == user.id
+
+
+def _can_delete_template(user: User, template: LetterTemplate) -> bool:
+    """F4: a creator may delete their own template; a platform ADMIN may delete any."""
+    return user.role == "ADMIN" or template.created_by == user.id
 
 
 # ---------- placeholders rendering ----------
@@ -284,7 +285,11 @@ def templates_list(request: Request, user: User = Depends(require_user), db=Depe
     clause = _template_scope_clause(user)
     if clause is not None:
         stmt = stmt.where(clause)
-    return render(request, "letters/templates.html", user=user, templates=db.scalars(stmt).all())
+    rows = [{"tpl": tpl,
+             "editable": _can_edit_template(user, tpl),
+             "deletable": _can_delete_template(user, tpl)}
+            for tpl in db.scalars(stmt).all()]
+    return render(request, "letters/templates.html", user=user, rows=rows)
 
 
 @router.get("/letters/templates/new")
@@ -299,7 +304,8 @@ def template_edit(tid: int, request: Request, user: User = Depends(require_user)
     template = db.get(LetterTemplate, tid)
     if not _allowed(user) or not template or not _can_view_template(user, template):
         return flash("/letters/templates", Translator(get_lang(request)).t("no_permission"))
-    return render(request, "letters/template_edit.html", user=user, template=template)
+    return render(request, "letters/template_edit.html", user=user, template=template,
+                  can_edit=_can_edit_template(user, template))
 
 
 @router.post("/letters/templates/save")
@@ -318,6 +324,40 @@ def template_save(request: Request, tid: int = Form(0), name: str = Form(...), s
     template.name, template.subject, template.body_html = name, subject, body_html
     db.commit()
     return flash("/letters/templates", t.t("msg_template_saved", name=name))
+
+
+@router.post("/letters/templates/{tid}/copy")
+def template_copy(tid: int, request: Request, user: User = Depends(require_user), db=Depends(get_db)):
+    """F4: anyone may copy a shared template into one they own, then edit that copy."""
+    t = Translator(get_lang(request))
+    if not _allowed(user):
+        return flash("/", t.t("no_permission"))
+    src = db.get(LetterTemplate, tid)
+    if not src:
+        return flash("/letters/templates", t.t("msg_template_missing"))
+    copy = LetterTemplate(name=f"{src.name}{t.t('template_copy_suffix')}",
+                          bg=user.bg or GLOBAL_BG, subject=src.subject,
+                          body_html=src.body_html, created_by=user.id)
+    db.add(copy)
+    db.commit()
+    return flash(f"/letters/templates/{copy.id}/edit", t.t("msg_template_copied", name=copy.name))
+
+
+@router.post("/letters/templates/{tid}/delete")
+def template_delete(tid: int, request: Request, user: User = Depends(require_user), db=Depends(get_db)):
+    """F4: the creator may delete their own template; a platform ADMIN may delete any."""
+    t = Translator(get_lang(request))
+    if not _allowed(user):
+        return flash("/", t.t("no_permission"))
+    template = db.get(LetterTemplate, tid)
+    if not template:
+        return flash("/letters/templates", t.t("msg_template_missing"))
+    if not _can_delete_template(user, template):
+        return flash("/letters/templates", t.t("no_permission"))
+    name = template.name
+    db.delete(template)
+    db.commit()
+    return flash("/letters/templates", t.t("msg_template_deleted", name=name))
 
 
 # ---------- compose & send ----------

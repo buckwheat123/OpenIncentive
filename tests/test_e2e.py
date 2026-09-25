@@ -17,7 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.db import SessionLocal  # noqa: E402
-from app.models import Actual, BonusPlan, DataOpLog, Letter, LetterTemplate, User  # noqa: E402
+from app.models import Actual, BonusPlan, BonusResult, CalcRun, DataOpLog, Letter, LetterTemplate, User  # noqa: E402
 
 BASE = "http://127.0.0.1:8000"
 
@@ -70,16 +70,51 @@ YEAR_LETTER_CSV = "\n".join([
     YEAR_HEADER,
     "2028,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,"
     "Sales Incentive,Revenue,60,Standard Curve,1000000,,1400000,",
+    "2028,E003,赵磊,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,,95,",
 ]) + "\n"
 
 # Conflict probe (Batch E2b): E001's 2026 Sales Incentive/Revenue plan already exists
-# with quarterly targets 2600000 (Q2) / 3900000 (Q3). (2026-Q1 is sealed by test [9],
-# so we use the unsealed Q2/Q3.) Q2 is re-declared with a DIFFERENT quota (999999 →
-# conflict), Q3 matches the stored value (→ importable, not a conflict).
+# with quarterly targets 2600000 (Q2) / 3900000 (Q3), weights 60/40. (2026-Q1 is sealed
+# by test [9], so we use the unsealed Q2/Q3.) Weights stay 60/40 so the plan name is not
+# re-suffixed by F5 and the quota conflict is detected against the real "Sales Incentive".
+#   * 2026-Q2 → quotas disagree (999999 / 5) → BOTH rows conflict-blocked (calc is authority)
+#   * 2026-Q3 → quotas match exactly (3900000 / 90) → identical, silently ignored
+#   * 2029-Q1 → a brand-new quarter with no calc data → imports cleanly as the one new
+#               version, proving non-conflicting letter data still lands. Each employee/
+#               period/plan group totals 100%, so F1 never rejects E001 here.
 CONFLICT_YEAR_CSV = "\n".join([
     YEAR_HEADER,
     "2026,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,"
     "Sales Incentive,Revenue,60,Standard Curve,,999999,3900000,",
+    "2026,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,,5,90,",
+    "2029,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,"
+    "Sales Incentive,Revenue,60,Standard Curve,800000,,,",
+    "2029,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,85,,,",
+]) + "\n"
+
+
+# F1 weight-rejection probe (letter/year format): E002's Sales Incentive only reaches
+# 60% (no CS) -> the WHOLE employee is rejected; E004's plan totals 100% -> imports fine.
+WEIGHT_REJECT_CSV = "\n".join([
+    YEAR_HEADER,
+    "2028,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,"
+    "Sales Incentive,Revenue,60,Standard Curve,1000000,,,",
+    "2028,E004,陈静,chen.jing@example.com,Commercial,Commercial Sales,商务专员,M002,EMPLOYEE,"
+    "Sales Incentive,Revenue,60,Standard Curve,1100000,,,",
+    "2028,E004,陈静,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,,,",
+]) + "\n"
+
+# F5 plan-uniqueness probe (big-table format, fresh period 2030-Q1): the same KPI/Curve/
+# weight combination must map to exactly one plan name within a period (cross-BG). E001
+# registers "Alpha Plan"; E002 declares the identical combo as "Beta Plan" (-> renamed to
+# Alpha Plan); E003 reuses "Alpha Plan" for a different combo (-> auto-suffixed Alpha Plan_v1).
+F5_CSV = "\n".join([
+    BIG_HEADER,
+    "2030-Q1,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Alpha Plan,Revenue,60,1000000,Standard Curve,900000",
+    "2030-Q1,E001,张伟,,,,,,,Alpha Plan,Customer Satisfaction,40,90,Quality Curve,92",
+    "2030-Q1,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Beta Plan,Revenue,60,1000000,Standard Curve,950000",
+    "2030-Q1,E002,李娜,,,,,,,Beta Plan,Customer Satisfaction,40,90,Quality Curve,88",
+    "2030-Q1,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,Alpha Plan,Customer Satisfaction,100,90,Quality Curve,90",
 ]) + "\n"
 
 
@@ -154,15 +189,14 @@ def main():
         assert "E001" in prefilled and "1150000" in prefilled
         print("[6] template download (blank + recent-quarter prefill) OK")
 
-        # ---- two-pass calculation for the imported quarter ----
-        calc_csv = ("period,employee_id,name,plan_name,action\n"
-                    "2027-Q1,E001,张伟,Sales Incentive,计算\n"
-                    "2027-Q1,E002,李娜,Sales Incentive,计算")
-        r = upload(c, f"{BASE}/admin/calc/preview", calc_csv)
-        assert "校验结果" in r.text and "可计算" in r.text, r.text[:600]
-        r = c.post(f"{BASE}/admin/calc/execute", data={"csv_text": calc_csv, "note": "e2e"})
-        assert "已完成计算" in r.text and "2 人" in r.text, r.text[:600]
-        print("[7] two-pass calculation OK")
+        # ---- one-click calculation for the imported quarter (F3: two-pass CSV removed) ----
+        r = c.post(f"{BASE}/admin/runs", data={"period": "2027-Q1", "note": "e2e"})
+        assert "已触发计算" in r.text and "计算 2 人" in r.text, r.text[:600]
+        db.expire_all()
+        run_2027 = db.query(CalcRun).filter_by(period="2027-Q1").order_by(CalcRun.id.desc()).first()
+        assert run_2027 and db.query(BonusResult).filter_by(
+            run_id=run_2027.id, employee_id=e001.id, plan_name="Sales Incentive").first()
+        print("[7] one-click calculation OK")
 
         # ---- additive special adjustment (single) ----
         r = c.post(f"{BASE}/admin/adjust", data={
@@ -180,6 +214,16 @@ def main():
         assert "已封存" in r.text
         print("[9] one-click multi-BG seal blocks adjustments OK")
 
+        # ---- F2: re-running a sealed quarter must not blank already-calculated people ----
+        # All 2026 sales BGs (Retail/Commercial) are sealed -> a fresh 2026-Q1 run skips
+        # everyone and computes 0, yet E001's earlier result must still show as 已计算.
+        r = c.post(f"{BASE}/admin/runs", data={"period": "2026-Q1", "note": "F2 recalc sealed"})
+        assert "计算 0 人" in r.text, r.text[:400]
+        db.expire_all()
+        bg_view = c.get(f"{BASE}/bg?period=2026-Q1").text
+        assert "已计算" in bg_view and "E001" in bg_view   # result_for scans ALL runs, not just newest
+        print("[9b] F2 sealed-quarter still shows previously-calculated OK")
+
         # ---- batch adjustments via CSV (two-pass) ----
         adj_csv = ("period,employee_id,name,adjustment_pct,reason\n"
                    "2027-Q1,E002,李娜,5,批量测试特批\n"
@@ -191,14 +235,14 @@ def main():
         assert "批量测试特批" in r.text
         print("[10] batch adjustments via CSV OK")
 
-        # ---- period-filtered template downloads on calc/adjust/delete pages ----
-        calc_tpl = c.get(f"{BASE}/admin/calc/template.csv?period=2027-Q1").text
-        assert "E001" in calc_tpl and "2026-Q1" not in calc_tpl
+        # ---- period-filtered template downloads (F6 prefill export + adjust/delete) ----
+        f6_tpl = c.get(f"{BASE}/admin/import/template.csv?period=2027-Q1").text.lstrip("\ufeff")
+        assert "E001" in f6_tpl and "2027-Q1" in f6_tpl and "2026-Q1" not in f6_tpl
         adj_tpl = c.get(f"{BASE}/admin/adjust/template.csv?period=2027-Q1").text
         assert "E001" in adj_tpl and "2026-Q1" not in adj_tpl
         del_tpl = c.get(f"{BASE}/admin/data/delete-template.csv?entity=actual&period=2027-Q1").text
         assert "1150000" in del_tpl and "E001" in del_tpl
-        print("[11] period-filtered calc/adjust/delete templates OK")
+        print("[11] F6 prefilled big-table export + adjust/delete templates (period-filtered) OK")
 
         # ---- export page + year/BG filtered export (two sheets) ----
         export_page = c.get(f"{BASE}/admin/export").text
@@ -220,6 +264,26 @@ def main():
         assert "weighted_rate_pct" not in rk.text.splitlines()[0]     # no total-rate columns in header
         assert "E001" in rk.text and "E004" not in rk.text            # same BG filter
         print("[12] export page + two-sheet (total rate + per-KPI) export OK")
+
+        # ---- F5 plan-uniqueness: same combo -> one name (rename); same name/diff combo -> suffix ----
+        r = upload(c, f"{BASE}/admin/import/preview", F5_CSV)
+        assert "计划名将从「Beta Plan」改为「Alpha Plan」" in r.text, r.text[:800]   # E002 renamed
+        assert "Alpha Plan_v1" in r.text, r.text[:800]                        # E003 auto-suffixed
+        r = c.post(f"{BASE}/admin/import/execute", data={"csv_text": F5_CSV})
+        assert "导入完成" in r.text, r.text[:600]
+        db.expire_all()
+        e001 = db.query(User).filter_by(employee_id="E001").first()
+        e002 = db.query(User).filter_by(employee_id="E002").first()
+        e003 = db.query(User).filter_by(employee_id="E003").first()
+        p1 = db.query(BonusPlan).filter_by(period="2030-Q1", employee_id=e001.id,
+                                           plan_name="Alpha Plan", is_current=True).first()
+        p2 = db.query(BonusPlan).filter_by(period="2030-Q1", employee_id=e002.id,
+                                           plan_name="Alpha Plan", is_current=True).first()
+        p3 = db.query(BonusPlan).filter_by(period="2030-Q1", employee_id=e003.id,
+                                           plan_name="Alpha Plan_v1", is_current=True).first()
+        assert p1 and p2 and p3                                 # E002 landed under Alpha Plan
+        assert db.query(BonusPlan).filter_by(plan_name="Beta Plan").first() is None   # never stored
+        print("[12b] F5 plan-uniqueness (rename identical combo, suffix clashing name) OK")
 
         # ---- letter-data import screen (separate, no actual column) ----
         data_page = c.get(f"{BASE}/letters/data").text
@@ -281,6 +345,21 @@ def main():
         assert next(k for k in q2_after.kpis if k.kpi_name == "Revenue").quota == 2600000  # untouched
         assert q2_after.version == q2_before.version              # no new Q2 version created
         print("[13c] letter-vs-calc conflict blocked + conflict CSV exported OK")
+
+        # ---- F1 letter weight rule: a plan not totaling 100% rejects the WHOLE employee ----
+        r = upload(c, f"{BASE}/letters/data/preview", WEIGHT_REJECT_CSV)
+        assert "权重合计不是 100%" in r.text, r.text[:800]      # E002 (60% only) flagged
+        assert "可导入" in r.text                              # E004 (60+40=100) still importable
+        r = c.post(f"{BASE}/letters/data/execute", data={"csv_text": WEIGHT_REJECT_CSV})
+        assert "计划新版本 1 个" in r.text, r.text[:600]        # only E004 lands
+        db.expire_all()
+        e002 = db.query(User).filter_by(employee_id="E002").first()
+        e004 = db.query(User).filter_by(employee_id="E004").first()
+        assert db.query(BonusPlan).filter_by(period="2028-Q1", employee_id=e002.id).first() is None  # rejected
+        ok4 = db.query(BonusPlan).filter_by(period="2028-Q1", employee_id=e004.id,
+                                            plan_name="Sales Incentive", is_current=True).first()
+        assert ok4 and len(ok4.kpis) == 2
+        print("[13d] F1 letter weight!=100% rejects the whole employee (others import) OK")
 
         # ---- BG admin #4: multi-BG scope (BGA1 manages Retail + Commercial) ----
         login(c, "BGA1", "BGA1")
@@ -362,31 +441,55 @@ def main():
         db.expire_all()
         mgr = e002.manager
         assert mgr and mgr.name in letter.body_html
-        # BG_ADMIN sees the platform's Global template and can reuse it,
-        # but cannot overwrite the original.
+        # ---- F4: templates shared across admins; others' templates read-only but copyable ----
         login(c, "BGA1", "BGA1")
         tpl_page = c.get(f"{BASE}/letters/templates").text
-        assert "集团统一奖金通知（Global）" in tpl_page
+        assert "集团统一奖金通知（Global）" in tpl_page      # BG admin sees ADMIN's Global template
+        assert "创建者" in tpl_page                          # owner column present
+        db.expire_all()
         global_tpl = db.query(LetterTemplate).filter_by(bg="Global").first()
-        compose_page = c.get(f"{BASE}/letters/compose").text
-        assert global_tpl.name in compose_page
+        bga1 = db.query(User).filter_by(employee_id="BGA1").first()
+        assert global_tpl.name in c.get(f"{BASE}/letters/compose").text   # shared in compose dropdown
+        edit_as_bga1 = c.get(f"{BASE}/letters/templates/{global_tpl.id}/edit").text
+        assert "只读" in edit_as_bga1 and "复制并编辑" in edit_as_bga1     # read-only + copy action
         denied = c.post(f"{BASE}/letters/templates/save", data={
             "tid": global_tpl.id, "name": "hijack", "subject": "x", "body_html": "<p>x</p>"},
             follow_redirects=False)
         assert denied.status_code == 303 and "/letters/templates" in denied.headers.get("location", "")
-        # save-as-new from a Global template is allowed and lands in BGA1's primary BG
-        r = c.post(f"{BASE}/letters/templates/save", data={
-            "tid": global_tpl.id, "name": "BGA1 copy", "subject": "hi",
-            "body_html": "<p>{{NAME}}</p>", "save_as_new": "true"})
-        assert "已保存" in r.text
         db.expire_all()
-        copy = db.query(LetterTemplate).filter_by(name="BGA1 copy").first()
-        assert copy and copy.bg == "Retail"
-        print("[16b] letters #10 (plan/perf split, expanded placeholders, Global templates) OK")
+        assert db.get(LetterTemplate, global_tpl.id).name != "hijack"     # original untouched
+        cp = c.post(f"{BASE}/letters/templates/{global_tpl.id}/copy", follow_redirects=True)
+        assert "已复制模板" in cp.text
+        db.expire_all()
+        mycopy = db.query(LetterTemplate).filter(LetterTemplate.created_by == bga1.id,
+                                                 LetterTemplate.name.like("%副本%")).order_by(
+                                                 LetterTemplate.id.desc()).first()
+        assert mycopy and mycopy.bg == "Retail"                          # copy owned by BGA1, in their BG
+        copy_id = mycopy.id                                              # capture before delete/expire
+        assert "只读" not in c.get(f"{BASE}/letters/templates/{copy_id}/edit").text  # editable
+        c.post(f"{BASE}/letters/templates/{copy_id}/delete")            # creator may delete own copy
+        db.expire_all()
+        assert db.get(LetterTemplate, copy_id) is None
+        dd = c.post(f"{BASE}/letters/templates/{global_tpl.id}/delete", follow_redirects=False)  # not ADMIN's
+        assert dd.status_code == 303
+        db.expire_all()
+        assert db.get(LetterTemplate, global_tpl.id) is not None
+        print("[16b] F4 shared templates: read-only for others, copy + delete-own OK")
 
-        # ---- template save-as-new ----
+        # ---- F4: platform ADMIN can delete ANY template (including a BG admin's) ----
+        login(c, "ADMIN1", "admin123")
+        db.expire_all()
+        bga_tpl = db.query(LetterTemplate).filter_by(name="季度奖金通知").first()   # seed, created_by BGA1
+        assert bga_tpl
+        bga_id = bga_tpl.id                                           # capture before delete/expire
+        c.post(f"{BASE}/letters/templates/{bga_id}/delete")
+        db.expire_all()
+        assert db.get(LetterTemplate, bga_id) is None
+        print("[16c] F4 platform ADMIN deletes a BG admin's template OK")
+
+        # ---- template save-as-new (copy from the still-live Global template) ----
         r = c.post(f"{BASE}/letters/templates/save", data={
-            "tid": tpl.id, "name": "季度奖金通知 v2", "subject": "测试主题",
+            "tid": global_tpl.id, "name": "季度奖金通知 v2", "subject": "测试主题",
             "body_html": "<p>你好 {{NAME}}</p>", "save_as_new": "true"})
         assert "已保存" in r.text
         assert db.query(LetterTemplate).filter_by(name="季度奖金通知 v2").first()

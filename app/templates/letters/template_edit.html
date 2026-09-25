@@ -1,16 +1,30 @@
 {% extends "base.html" %}
 {% block title %}{{ t('template') }}{% endblock %}
 {% block content %}
+{% set readonly = template and not can_edit %}
 <div class="card">
-  <h2 style="margin-top:0">{% if template %}{{ t('edit') }}：{{ template.name }}{% else %}{{ t('new_template') }}{% endif %}</h2>
+  <h2 style="margin-top:0">
+    {% if not template %}{{ t('new_template') }}
+    {% elif can_edit %}{{ t('edit') }}：{{ template.name }}
+    {% else %}{{ template.name }} <span class="tag muted">{{ t('template_read_only') }}</span>{% endif %}
+  </h2>
+
+  {% if readonly %}
+  <p class="muted">{{ t('templates_shared_note') }}</p>
+  <form method="post" action="/letters/templates/{{ template.id }}/copy" style="margin-bottom:16px">
+    <button class="btn" type="submit">{{ t('copy_and_edit') }}</button>
+    <a class="btn secondary" href="/letters/templates">{{ t('back') }}</a>
+  </form>
+  {% endif %}
+
   <form method="post" action="/letters/templates/save">
     <input type="hidden" name="tid" value="{{ template.id if template else 0 }}">
     <div class="inline">
-      <div><label>{{ t('template_name') }}</label><input name="name" value="{{ template.name if template else '' }}" required></div>
-      <div style="flex:1"><label>{{ t('letter_subject') }}</label><input name="subject" style="width:100%" value="{{ template.subject if template else '' }}" required></div>
+      <div><label>{{ t('template_name') }}</label><input name="name" style="width:100%" value="{{ template.name if template else '' }}" {% if readonly %}disabled{% endif %} {% if not readonly %}required{% endif %}></div>
+      <div style="flex:1"><label>{{ t('letter_subject') }}</label><input name="subject" style="width:100%" value="{{ template.subject if template else '' }}" {% if readonly %}disabled{% endif %} {% if not readonly %}required{% endif %}></div>
     </div>
     <label>{{ t('letter_body') }}</label>
-    <textarea name="body_html">{% if template %}{{ template.body_html }}{% else %}{% raw %}<p>{{NAME}}，你好：</p>
+    <textarea name="body_html" style="width:100%" {% if readonly %}disabled{% endif %}>{% if template %}{{ template.body_html }}{% else %}{% raw %}<p>{{NAME}}，你好：</p>
 <p>{{MESSAGE}}</p>
 <p>以下是你 {{PERIOD}} 的奖金计划：</p>
 {{PLAN_TABLE}}
@@ -19,10 +33,12 @@
 <p>所用支付 Curve（达成率 → 支付率，含区间斜率）：</p>
 {{CURVE_SUMMARY}}
 <p>如有疑问，请与你的经理 {{MANAGER}} 或 BG 管理员联系。</p>{% endraw %}{% endif %}</textarea>
+    {% if not readonly %}
     <p>
       <button class="btn" type="submit" name="save_as_new" value="">{{ t('save') }}</button>
       {% if template %}<button class="btn secondary" type="submit" name="save_as_new" value="true">{{ t('save_as_new') }}</button>{% endif %}
     </p>
+    {% endif %}
   </form>
 </div>
 {% endblock %}

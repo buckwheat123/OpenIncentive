@@ -1,7 +1,7 @@
 """Admin console: users (+ proxy BG admin), curves, unified quarterly big-table import
-(versioned, two-pass, shared with BG admins), data deletion (CSV + audit), two-pass
-calculation, adjustments (single + batch CSV), seals, export (year + BG),
-language/translation management."""
+(versioned, two-pass, shared with BG admins), data deletion (CSV + audit), one-click
+period calculation, adjustments (single + batch CSV), seals, export (year + BG),
+prefilled quarterly big-table export, language/translation management."""
 
 import json
 
@@ -10,12 +10,12 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 
 from ..calc import apply_adjustment, is_locked, run_calculation
-from ..csvio import (_csv_rows_for_calc_template, _split_bgs, actual_delete_template_rows, adjustment_template_rows,
+from ..csvio import (_split_bgs, actual_delete_template_rows, adjustment_template_rows,
                      apply_deletions, big_error_rows, big_summary, big_template_rows, collect_originals,
                      decode_csv, deletion_logs, execute_big_import, execute_user_import, export_kpi_rows,
                      export_results_rows,
                      import_labels, label_rows, parse_adjustment_rows, parse_big_rows, parse_user_rows,
-                     plan_delete_template_rows, recent_periods, resolve_employee, to_csv, user_error_rows,
+                     plan_delete_template_rows, recent_periods, to_csv, user_error_rows,
                      user_summary, user_template_rows)
 from ..curves import parse_points
 from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, apply_managed_bgs, get_db, home_for, make_session,
@@ -227,7 +227,7 @@ def _import_bg_scope(user: User) -> set[str] | None:
 
 @router.get("/import")
 def import_page(request: Request, user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
-    return render(request, "admin/import.html", user=user, periods=recent_periods(db))
+    return render(request, "admin/import.html", user=user, periods=recent_periods(db, n=1000))
 
 
 @router.get("/import/template.csv")
@@ -330,94 +330,6 @@ async def data_delete(request: Request, entity: str = Form("actual"), file: Uplo
     except Exception as e:  # noqa: BLE001
         return flash("/admin/data", f"{t.t('delete')}: {e}")
     return flash("/admin/data", f"{t.t('actual' if entity == 'actual' else 'plan')}：{msg}")
-
-
-# ---------- two-pass calculation via CSV ----------
-
-@router.get("/calc")
-def calc_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    periods = sorted(db.scalars(select(BonusPlan.period).distinct()).all(), reverse=True)
-    return render(request, "admin/calc.html", user=user, periods=periods,
-                  template_periods=recent_periods(db))
-
-
-@router.get("/calc/template.csv")
-def calc_template(request: Request, period: str = "",
-                  user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    """One row per current plan (period, employee); admin appends action=计算."""
-    return _csv_response(_csv_rows_for_calc_template(db, period=period.strip() or None),
-                         "calc_template.csv")
-
-
-def _parse_calc_rows(db, text: str, t: Translator) -> list[dict]:
-    """Pass-1 read: validate each row. Returns rows with status."""
-    out = []
-    from ..csvio import _rows
-    for row in _rows(text):
-        action = row.get("action", "").strip()
-        if not action:
-            continue
-        period = row.get("period")
-        employee = resolve_employee(db, row.get("employee_id"), row.get("name"))
-        entry = {"period": period, "emp_ext": row.get("employee_id") or row.get("name"),
-                 "employee": employee, "status": t.t("row_ok"), "note": "", "ok": True}
-        if not period:
-            entry.update(status=t.t("row_no_period"), note="period", ok=False)
-        elif employee is None:
-            entry.update(status=t.t("row_no_employee"), note="", ok=False)
-        else:
-            plan = db.scalars(
-                select(BonusPlan).where(
-                    BonusPlan.period == period, BonusPlan.employee_id == employee.id,
-                    BonusPlan.is_current == True, BonusPlan.is_deleted == False,  # noqa: E712
-                )).first()
-            if plan is None:
-                entry.update(status=t.t("row_no_plan"), note="", ok=False)
-            elif is_locked(db, period, employee.bg):
-                entry.update(status=t.t("row_sealed"), note=f"{period}/{employee.bg}", ok=False)
-            else:
-                entry["note"] = f"{employee.name} · {plan.plan_name}"
-        out.append(entry)
-    return out
-
-
-@router.post("/calc/preview")
-async def calc_preview(request: Request, file: UploadFile | None = None,
-                       user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    t = _t(request)
-    if file is None or not file.filename:
-        return flash("/admin/calc", t.t("msg_no_file"))
-    text = decode_csv(await file.read())
-    rows = _parse_calc_rows(db, text, t)
-    if not rows:
-        return flash("/admin/calc", t.t("no_action_rows"))
-    return render(request, "admin/calc_preview.html", user=user, rows=rows, csv_text=text)
-
-
-@router.post("/calc/execute")
-def calc_execute(request: Request, csv_text: str = Form(...), note: str = Form(""),
-                 user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    t = _t(request)
-    rows = _parse_calc_rows(db, csv_text, t)
-    targets: dict[str, list[int]] = {}
-    for entry in rows:
-        if not entry["ok"]:
-            continue
-        targets.setdefault(entry["period"], []).append(entry["employee"].id)
-    if not targets:
-        return flash("/admin/calc", t.t("no_action_rows"))
-    run_ids, computed, skipped = [], 0, 0
-    try:
-        for period, emp_ids in targets.items():
-            run, stats = run_calculation(db, period, user, note, emp_ids, get_lang(request))
-            run_ids.append(run.id)
-            computed += stats["computed"]
-            skipped += len(stats["skipped"])
-    except ValueError as e:
-        return flash("/admin/calc", str(e))
-    msg = t.t("msg_calc_done", n=computed) + (t.t("msg_calc_skipped", n=skipped) if skipped else "")
-    dest = f"/admin/runs/{run_ids[0]}" if len(run_ids) == 1 else "/admin"
-    return flash(dest, msg)
 
 
 # ---------- calculation runs (quick trigger + detail) ----------

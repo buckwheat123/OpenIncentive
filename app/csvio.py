@@ -208,6 +208,87 @@ def _user_info_changes(db: Session, employee: User, raw: dict, actor: User) -> d
     return changes
 
 
+def _sig_from_kpis(plan: BonusPlan) -> tuple:
+    """Canonical plan signature: sorted (kpi_name, weight, curve_id) — quota excluded
+    so that different targets under the same structure stay the SAME plan (F5)."""
+    return tuple(sorted((k.kpi_name, round(k.weight_pct, 6), k.curve_id) for k in plan.kpis))
+
+
+def _sig_from_entries(rows: list[dict]) -> tuple:
+    return tuple(sorted((e["kpi_name"], round(e["weight"], 6), e["curve_id"]) for e in rows))
+
+
+def _load_plan_registry(db: Session, period: str) -> tuple[dict, dict]:
+    """Per-period, cross-BG registries: signature -> canonical name and name -> signature,
+    seeded from the quarter's currently-active plans (F5: a plan_name maps to exactly one
+    KPI/Curve/weight combination within a period)."""
+    sig_to_name: dict[tuple, str] = {}
+    name_to_sig: dict[str, tuple] = {}
+    plans = db.scalars(
+        select(BonusPlan).where(BonusPlan.period == period,
+                                BonusPlan.is_current == True,   # noqa: E712
+                                BonusPlan.is_deleted == False)  # noqa: E712
+    ).all()
+    for p in plans:
+        sig = _sig_from_kpis(p)
+        name_to_sig[p.plan_name] = sig
+        sig_to_name.setdefault(sig, p.plan_name)
+    return sig_to_name, name_to_sig
+
+
+def _free_variant(base: str, taken: dict) -> str:
+    """First unused `_vN` suffix for a name already bound to a different combination."""
+    i = 1
+    while f"{base}_v{i}" in taken:
+        i += 1
+    return f"{base}_v{i}"
+
+
+def resolve_plan_names(db: Session, entries: list[dict], t: Translator) -> None:
+    """F5: enforce one-plan-name-per-combination within each period (globally, across BGs).
+
+    For each (period, employee, incoming name) group of valid rows:
+      * same KPI/Curve/weight combo already registered under name C -> adopt C
+        (renamed here if the sheet used a different label);
+      * the incoming name is already taken by a DIFFERENT combo -> append _v1/_v2;
+      * otherwise register this fresh name + combo.
+    Rows are rewritten in place so the whole downstream pipeline (identical-detection,
+    conflict checks, execution) operates on the canonical name."""
+    groups: dict[tuple, list[dict]] = {}
+    for e in entries:
+        if e["ok"]:
+            groups.setdefault((e["period"], e["employee"].id, e["plan_name"]), []).append(e)
+    registries: dict[str, tuple[dict, dict]] = {}
+
+    def reg(period: str):
+        if period not in registries:
+            registries[period] = _load_plan_registry(db, period)
+        return registries[period]
+
+    for (period, _emp_id, raw_name), rows in groups.items():
+        sig_to_name, name_to_sig = reg(period)
+        sig = _sig_from_entries(rows)
+        if sig in sig_to_name:
+            canonical = sig_to_name[sig]
+            if canonical != raw_name:
+                note = t.t("plan_renamed", old=raw_name, new=canonical)
+                for e in rows:
+                    e["note"] = (e["note"] + "；" if e["note"] else "") + note
+        elif raw_name in name_to_sig:
+            canonical = _free_variant(raw_name, name_to_sig)
+            sig_to_name[sig] = canonical
+            name_to_sig[canonical] = sig
+            note = t.t("plan_suffixed", old=raw_name, new=canonical)
+            for e in rows:
+                e["note"] = (e["note"] + "；" if e["note"] else "") + note
+        else:
+            canonical = raw_name
+            sig_to_name[sig] = canonical
+            name_to_sig[canonical] = sig
+        for e in rows:
+            e["plan_name"] = canonical
+
+
 def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
                    with_actual: bool = True) -> list[dict]:
     """Pass-1 validation of the unified sheet. Each entry carries ok/ignored flags
@@ -270,6 +351,7 @@ def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
         entry["curve_id"] = curve.id
         entry["status"] = t.t("row_importable")
         entry["ok"] = True
+    resolve_plan_names(db, entries, t)
     _mark_identical_groups(db, entries, actor, t, with_actual)
     return entries
 
@@ -327,15 +409,20 @@ def big_summary(entries: list[dict]) -> dict:
 
 def execute_big_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
                        with_actual: bool = True, proxy_note: str = "",
-                       conflict_check: bool = False) -> str:
+                       conflict_check: bool = False, weight_check: bool = False) -> str:
     """Pass-2: re-parse and import the valid rows. Identical rows are ignored,
     invalid rows are skipped (they were reported in the preview).
 
     conflict_check=True additionally blocks any row whose quota disagrees with an
     already-current quarterly plan (Batch E2b) — used by the letter-data import so it
-    can never silently overwrite the calculation data."""
+    can never silently overwrite the calculation data.
+
+    weight_check=True enforces F1: any employee who has a plan whose weights don't sum
+    to 100% has ALL of their rows rejected (letter-data import only)."""
     t = Translator(lang)
     entries = parse_big_rows(db, text, actor, lang, with_actual)
+    if weight_check:
+        mark_letter_weight_errors(db, entries, t)
     if conflict_check:
         mark_letter_conflicts(db, entries, t)
     summary = big_summary(entries)
@@ -550,8 +637,34 @@ def parse_year_letter_rows(db: Session, text: str, actor: User, lang: str = DEFA
     overwritten by a letter import. The calculation sheet remains the authority; the
     user downloads the conflict list to reconcile."""
     entries = parse_big_rows(db, year_to_big_text(text), actor, lang, with_actual=False)
-    mark_letter_conflicts(db, entries, Translator(lang))
+    tr = Translator(lang)
+    mark_letter_weight_errors(db, entries, tr)
+    mark_letter_conflicts(db, entries, tr)
     return entries
+
+
+def mark_letter_weight_errors(db: Session, entries: list[dict], t: Translator) -> None:
+    """F1 (letter import only): every plan's weights must total 100%. If any single plan
+    of an employee fails, the WHOLE employee's rows are rejected and not imported — a
+    plan that doesn't add up signals the sheet is wrong for that person, so none of it
+    should land. The calculation big-table sheet deliberately allows non-100 weights and
+    never calls this."""
+    totals: dict[tuple, float] = {}
+    for e in entries:
+        if e["ok"]:
+            key = (e["employee"].id, e["period"], e["plan_name"])
+            totals[key] = totals.get(key, 0.0) + (e["weight"] or 0.0)
+    bad_emps: dict[int, str] = {}
+    for (emp_id, _period, plan), total in totals.items():
+        if abs(total - 100.0) > 1e-6 and emp_id not in bad_emps:
+            bad_emps[emp_id] = f"{plan}（{fmt_num(total)}%）"
+    if not bad_emps:
+        return
+    for e in entries:
+        if e["ok"] and e["employee"].id in bad_emps:
+            e["ok"] = False
+            e["status"] = t.t("row_weight_not_100")
+            e["note"] = t.t("row_weight_not_100_note", plan=bad_emps[e["employee"].id])
 
 
 def mark_letter_conflicts(db: Session, entries: list[dict], t: Translator) -> None:
@@ -634,7 +747,7 @@ def year_letter_conflict_rows(db: Session, text: str, actor: User,
 def execute_year_letter_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
                                proxy_note: str = "") -> str:
     return execute_big_import(db, year_to_big_text(text), actor, lang, with_actual=False,
-                              proxy_note=proxy_note, conflict_check=True)
+                              proxy_note=proxy_note, conflict_check=True, weight_check=True)
 
 
 def year_letter_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG) -> list[list]:
@@ -643,6 +756,7 @@ def year_letter_error_rows(db: Session, text: str, actor: User, lang: str = DEFA
     view) are mapped back to (year, employee, plan, kpi)."""
     expanded = year_to_big_text(text)
     entries = parse_big_rows(db, expanded, actor, lang, with_actual=False)
+    mark_letter_weight_errors(db, entries, Translator(lang))
     header = YEAR_HEADER + ["status", "note"]
     rows = [header]
     original_year_rows = _rows(text)
@@ -986,19 +1100,6 @@ def deletion_logs(db: Session) -> list[DataOpLog]:
         select(DataOpLog).where(DataOpLog.op_type == "DELETE")
         .order_by(DataOpLog.created_at.desc(), DataOpLog.id.desc())
     ).all())
-
-
-def _csv_rows_for_calc_template(db: Session, period: str | None = None) -> list[list]:
-    """One row per current plan; admin fills action=计算 to trigger."""
-    rows = [["period", "employee_id", "name", "plan_name", "action"]]
-    stmt = select(BonusPlan).where(BonusPlan.is_current == True, BonusPlan.is_deleted == False)  # noqa: E712
-    if period:
-        stmt = stmt.where(BonusPlan.period == period)
-    plans = db.scalars(stmt.order_by(BonusPlan.period, BonusPlan.employee_id)).all()
-    for p in plans:
-        emp = db.get(User, p.employee_id)
-        rows.append([p.period, emp.employee_id, emp.name, p.plan_name, ""])
-    return rows
 
 
 # ---------------------------------------------------------------- batch adjustments via CSV
