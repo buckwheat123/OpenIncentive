@@ -165,8 +165,11 @@ def build_plan_table(db, uid: int, year: int, plan_name: str, tr: Translator) ->
         rows.append({"label": f"{kpi_label} · {tr.t('attainment')}", "cells": attain_cells, "kind": ""})
         rows.append({"label": f"{kpi_label} · {tr.t('payout_rate')}", "cells": rate_cells, "kind": ""})
 
-    for key, kind in (("weighted_rate", "weighted"),
-                      ("special_adjust", "adj"), ("quarter_total_rate", "final")):
+    summary_rows = [("weighted_rate", "weighted")]
+    has_adj = any(q["result"] and q["result"].adjusted for q in qdata)
+    if has_adj:
+        summary_rows += [("special_adjust", "adj"), ("quarter_total_rate", "final")]
+    for key, kind in summary_rows:
         cells = []
         for q in qdata:
             r = q["result"]
@@ -212,6 +215,7 @@ def _person_context(db, target: User, year: str | None, lang: str, actor: User |
         "year": year_int,
         "plan_tables": plan_tables,
         "versions": versions,
+        "show_versions": bool(versions),
     }
 
 

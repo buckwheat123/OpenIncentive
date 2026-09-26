@@ -1,0 +1,7 @@
+﻿employee_id,name,email,role,bg,department,job_title,manager_id,password
+E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,
+E007,吴桐,wu.tong@example.com,EMPLOYEE,Retail,Sales East,销售代表,M010,
+M010,赵敏,zhao.min@e.com,MANAGER,Retail,Sales East,销售经理,M001,
+E008,郑华,zheng.hua@example.com,EMPLOYEE,Retail,Sales East,销售代表,M999,
+E001,张伟,zhang.wei@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,
+E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,

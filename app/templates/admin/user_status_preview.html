@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ t('users_status_title') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>{{ t('users_status_title') }} · {{ t('preview_result') }}</h3>
+  <p class="summary-counts">
+    {{ t('user_status_counts',
+         ch=(rows|selectattr('changed')|selectattr('ok')|list|length),
+         ig=(rows|selectattr('ok')|rejectattr('changed')|list|length),
+         er=(rows|rejectattr('ok')|list|length)) }}
+  </p>
+  <p class="muted">{{ t('users_status_preview_note') }}</p>
+  <table class="sortable">
+    <tr>
+      <th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th>
+      <th>{{ t('role') }}</th><th>{{ t('bg') }}</th>
+      <th>{{ t('is_active_col') }}</th><th>{{ t('status') }}</th><th>{{ t('note') }}</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.raw.employee_id }}</td>
+      <td>{{ r.raw.name }}</td>
+      <td>{{ r.raw.email }}</td>
+      <td>{{ r.raw.role }}</td>
+      <td>{{ r.raw.bg }}</td>
+      <td>{{ r.raw.is_active }}</td>
+      <td>
+        {% if not r.ok %}<span class="tag warn">{{ r.status }}</span>
+        {% elif r.changed %}<span class="tag {% if r.want %}ok{% else %}danger{% endif %}">{{ r.status }}</span>
+        {% else %}<span class="tag">{{ r.status }}</span>{% endif %}
+      </td>
+      <td>{{ r.note }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <div class="inline">
+    <form method="post" action="/admin/users/status/execute"
+          onsubmit="return confirm('{{ t('confirm_execute') }}')">
+      <input type="hidden" name="csv_text" value="{{ csv_text }}">
+      <button class="btn" type="submit">{{ t('confirm_execute') }}</button>
+    </form>
+    <a class="btn secondary" href="/admin/users">{{ t('back') }}</a>
+  </div>
+</div>
+{% endblock %}

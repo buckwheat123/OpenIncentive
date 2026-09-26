@@ -1,0 +1,2 @@
+﻿period,employee_id,name,kpi_name,actual,version,imported_at,action,reason
+2026-Q3,E002,李娜,Revenue,3030000,1,,DELETE,手工测试：误录实绩需删除（需在封存 2026-Q3 之前，或重播种后执行）

@@ -7,28 +7,42 @@
     <input type="hidden" name="cid" value="{{ editing.id if editing else 0 }}">
     <div class="inline">
       <div><label>{{ t('curve_name') }}</label><input name="name" value="{{ editing.name if editing else '' }}" required></div>
-      <div><label>{{ t('cap_pct_label') }}</label><input name="cap_pct" value="{{ editing.cap_pct if editing and editing.cap_pct is not none else '' }}"></div>
+      <div><label>{{ t('cap_pct_label') }} <span class="muted">{{ t('int_hint') }}</span></label>
+        <input name="cap_pct" inputmode="numeric" pattern="-?[0-9]*" title="{{ t('cap_int_hint') }}" value="{{ editing.cap_pct if editing and editing.cap_pct is not none else '' }}"></div>
     </div>
-    <label>{{ t('points') }} <span class="muted">{{ t('points_hint') }}</span></label>
+    <label>{{ t('points') }} <span class="muted">{{ t('points_int_hint') }}</span></label>
     <input name="points_text" style="width:100%" value="{{ editing.points_text if editing else '0:0,80:50,100:100,150:200' }}" required>
     <div style="margin-top:8px"><label>{{ t('description') }}</label><input name="description" style="width:100%" value="{{ editing.description if editing else '' }}"></div>
     <p><button class="btn" type="submit">{{ t('save') }}</button></p>
   </form>
 </div>
 <div class="card">
-  <table>
+  <table class="sortable">
     <tr><th>{{ t('curve_name') }}</th><th>{{ t('points') }}</th><th>{{ t('cap') }}</th><th>{{ t('description') }}</th>
-        <th>{{ t('interval_slope') }}</th><th>{{ t('updated_at') }}</th><th></th></tr>
+        <th>{{ t('interval_slope') }}</th><th>{{ t('curve_status') }}</th><th>{{ t('updated_at') }}</th><th></th></tr>
     {% for c in curves %}
-    <tr>
+    <tr{% if not c.is_active %} class="row-inactive"{% endif %}>
       <td>{{ c.name }}</td><td class="muted">{{ c.points_text }}</td>
-      <td>{% if c.cap_pct is not none %}{{ c.cap_pct|g }}%{% else %}{{ t('no_cap') }}{% endif %}</td>
+      <td data-sort="{{ c.cap_pct if c.cap_pct is not none else '' }}">{% if c.cap_pct is not none %}{{ c.cap_pct|g }}%{% else %}{{ t('no_cap') }}{% endif %}</td>
       <td>{{ c.description }}</td>
       <td class="muted">{% for s in c.segments %}{{ s.x1|g }}–{{ s.x2|g }}%: {{ s.slope|round(2) }}{{ ', ' if not loop.last }}{% endfor %}</td>
+      <td>{% if c.is_active %}<span class="tag ok">{{ t('curve_active') }}</span>{% else %}<span class="tag warn">{{ t('curve_inactive') }}</span>{% endif %}</td>
       <td>{{ c.updated_at|fmt }}</td>
-      <td><a href="/admin/curves/{{ c.id }}">{{ t('edit') }}</a></td>
+      <td class="actions">
+        <a class="btn small secondary" href="/admin/curves/{{ c.id }}">{{ t('edit') }}</a>
+        {% if c.is_active %}
+        <form class="inline-form" method="post" action="/admin/curves/{{ c.id }}/toggle"
+              onsubmit="return confirm('{{ t('confirm_curve_disable') }}')">
+          <button class="btn small warn" type="submit">{{ t('curve_disable') }}</button>
+        </form>
+        {% else %}
+        <form class="inline-form" method="post" action="/admin/curves/{{ c.id }}/toggle">
+          <button class="btn small" type="submit">{{ t('curve_enable') }}</button>
+        </form>
+        {% endif %}
+      </td>
     </tr>
-    {% else %}<tr><td colspan="7" class="muted">{{ t('no_curves') }}</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="8" class="muted">{{ t('no_curves') }}</td></tr>{% endfor %}
   </table>
 </div>
 {% endblock %}

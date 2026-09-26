@@ -5,23 +5,23 @@
   <h2 style="margin-top:0">{{ t('calc_runs') }} #{{ run.id }} <span class="muted">{{ run.period }} · {{ run.created_at|fmt }}
     · {{ run.creator.name if run.creator else '-' }}{% if run.note %} · {{ run.note }}{% endif %}</span></h2>
 
-  <table>
+  <table class="sortable">
     <tr>
       <th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('bg') }}</th>
       <th>{{ t('plan') }}</th><th class="right">{{ t('weighted_rate') }}</th>
       <th class="right">{{ t('special_adjust') }}</th><th class="right">{{ t('quarter_total_rate') }}</th>
-      <th>{{ t('status') }}</th><th>{{ t('kpi_col') }}</th>
+      <th>{{ t('status') }}</th><th>{{ t('kpi_col') }}</th><th></th>
     </tr>
     {% for r in results %}
     {% set detail = json.loads(r.detail_json) %}
     <tr>
-      <td>{{ r.employee.employee_id }}</td>
-      <td>{{ r.employee.name }}</td>
-      <td>{{ tl(r.employee.bg) }}</td>
+      <td>{{ r.snapshot_employee_id or r.employee.employee_id }}</td>
+      <td>{{ r.snapshot_name or r.employee.name }}</td>
+      <td>{{ tl(r.snapshot_bg or r.employee.bg) }}</td>
       <td>{{ tl(r.plan_name) }}</td>
-      <td class="right">{{ r.weighted_rate_pct }}%</td>
+      <td class="right" data-sort="{{ r.weighted_rate_pct }}">{{ r.weighted_rate_pct }}%</td>
       <td class="right">{% if r.adjusted %}{{ '%+g'|format(r.adjustment_pct) }} pp{% else %}-{% endif %}</td>
-      <td class="right"><strong>{{ r.final_rate_pct }}%</strong></td>
+      <td class="right" data-sort="{{ r.final_rate_pct }}"><strong>{{ r.final_rate_pct }}%</strong></td>
       <td>
         {% if (r.weight_total_pct - 100)|abs > 0.000001 %}<span class="tag warn">{{ t('weight_not_100_comment') }}（{{ t('weight_total') }} {{ r.weight_total_pct|g }}%）</span>{% endif %}
         {% if r.adjusted %}<span class="tag warn">{{ t('special_adjust') }}</span>{% endif %}
@@ -37,20 +37,21 @@
             <tr>
               <td>{{ tl(d.kpi) }}</td>
               <td class="right">{{ d.quota|num }}</td>
-              <td class="right">{% if d.actual is not none %}{{ d.actual|num }}{% else %}-{% endif %}</td>
-              <td class="right">{{ d.attainment_pct }}%</td>
+              <td class="right">{% if d.actual is not none %}{{ d.actual|num }}{% endif %}</td>
+              <td class="right">{% if d.attainment_pct is not none %}{{ d.attainment_pct }}%{% endif %}</td>
               <td>{{ tl(d.curve) }}</td>
               <td class="right">{{ d.weight_pct|g }}%</td>
-              <td class="right">{{ d.rate_pct }}%</td>
-              <td class="right">{{ (d.weight_pct / 100 * d.rate_pct)|g }}%</td>
+              <td class="right">{% if d.rate_pct is not none %}{{ d.rate_pct }}%{% endif %}</td>
+              <td class="right">{% if d.rate_pct is not none %}{{ (d.weight_pct / 100 * d.rate_pct)|g }}%{% endif %}</td>
             </tr>
             {% endfor %}
           </table>
         </details>
       </td>
+      <td><a href="/person/{{ r.employee_id }}?year={{ run.period.split('-')[0] }}">{{ t('view_quarter_detail') }}</a></td>
     </tr>
     {% else %}
-    <tr><td colspan="9" class="muted">{{ t('no_results') }}</td></tr>
+    <tr><td colspan="10" class="muted">{{ t('no_results') }}</td></tr>
     {% endfor %}
   </table>
 </div>

@@ -1,0 +1,2 @@
+﻿period,employee_id,name,plan_name,version,imported_at,action,reason
+2026-Q4,E001,张伟,Sales Incentive,1,,DELETE,手工测试：删除多余的未计算 Q4 计划

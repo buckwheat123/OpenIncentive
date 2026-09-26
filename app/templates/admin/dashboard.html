@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ t('admin_console') }}{% endblock %}
 {% block content %}
+<div class="hero">
+  <div class="hero-inner">
+    <span class="eyebrow">JUST CALCULATE IT™</span>
+    <h1>{{ t('admin_console') }}</h1>
+    <p>{{ t('app_title') }}</p>
+  </div>
+</div>
 <div class="grid">
   <a class="card" href="/admin/import">{{ t('csv_import') }}</a>
   <a class="card" href="/admin/data">{{ t('data_delete') }}</a>
@@ -21,7 +28,7 @@
     <div><label>{{ t('note') }}</label><input name="note" placeholder="{{ t('optional') }}"></div>
     <button class="btn" type="submit">{{ t('trigger') }}</button>
   </form>
-  <table>
+  <table class="sortable">
     <tr><th>#</th><th>{{ t('period') }}</th><th>{{ t('operator') }}</th><th>{{ t('time') }}</th><th>{{ t('note') }}</th></tr>
     {% for r in runs %}
     <tr><td><a href="/admin/runs/{{ r.id }}">{{ r.id }}</a></td><td>{{ r.period }}</td>
@@ -52,7 +59,7 @@
     </div>
     <button class="btn danger" type="submit">{{ t('seal') }}</button>
   </form>
-  <table>
+  <table class="sortable">
     <tr><th>{{ t('period') }}</th><th>{{ t('bg') }}</th><th>{{ t('sealed_by') }}</th><th>{{ t('time') }}</th></tr>
     {% for l in locks %}
     <tr><td>{{ l.period }}</td><td>{{ tl(l.bg) }}</td><td>{{ l.locker.name if l.locker else '-' }}</td><td>{{ l.locked_at|fmt }}</td></tr>

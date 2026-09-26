@@ -12,14 +12,15 @@ from sqlalchemy import select
 from ..calc import apply_adjustment, is_locked, run_calculation
 from ..csvio import (_split_bgs, actual_delete_template_rows, adjustment_template_rows,
                      apply_deletions, big_error_rows, big_summary, big_template_rows, collect_originals,
-                     decode_csv, deletion_logs, execute_big_import, execute_user_import, export_kpi_rows,
-                     export_results_rows,
-                     import_labels, label_rows, parse_adjustment_rows, parse_big_rows, parse_user_rows,
+                     decode_csv, deletion_logs, execute_big_import, execute_user_import,
+                     execute_user_status_import, export_kpi_rows, export_kpis_rows, export_plans_rows,
+                     export_results_rows, import_labels, label_rows, parse_adjustment_rows,
+                     parse_big_rows, parse_user_rows, parse_user_status_rows,
                      plan_delete_template_rows, recent_periods, to_csv, user_error_rows,
-                     user_summary, user_template_rows)
-from ..curves import parse_points
-from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, apply_managed_bgs, get_db, home_for, make_session,
-                    require_roles)
+                     user_status_rows, user_summary, user_template_rows)
+from ..curves import IntegerRequired, parse_cap, parse_points
+from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, apply_managed_bgs, bg_filter, get_db, home_for,
+                    make_session, require_roles)
 from ..i18n import Translator, get_lang, invalidate_label_cache
 from ..models import Adjustment, BonusPlan, BonusResult, CalcRun, Curve, DataOpLog, Label, Lock, User, utcnow
 from ..security import hash_password
@@ -111,8 +112,8 @@ def users_managed_bgs(uid: int, request: Request, bg: str = Form(""),
 # ---------- batch user import (ADMIN only, two-pass: create / update / ignore identical) ----------
 
 @router.get("/users/import/template.csv")
-def users_import_template(user=Depends(require_roles("ADMIN"))):
-    return _csv_response(user_template_rows(), "users_import_template.csv")
+def users_import_template(request: Request, user=Depends(require_roles("ADMIN"))):
+    return _csv_response(user_template_rows(get_lang(request)), "users_import_template.csv")
 
 
 @router.post("/users/import/preview")
@@ -181,6 +182,34 @@ def users_batch_toggle(request: Request, uids: list[int] = Form(default=[]),
                                      state=t.t("active") if want_active else t.t("inactive")))
 
 
+@router.get("/users/export.csv")
+def users_export(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    """v5.0 #5: export the user list (is_active prefilled Y/N) — the same sheet is the
+    batch enable/disable template: flip the flag and upload it back."""
+    return _csv_response(user_status_rows(db, get_lang(request)), "users_export.csv")
+
+
+@router.post("/users/status/preview")
+async def users_status_preview(request: Request, file: UploadFile | None = None,
+                               user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    t = _t(request)
+    if file is None or not file.filename:
+        return flash("/admin/users", t.t("msg_no_file"))
+    text = decode_csv(await file.read())
+    entries = parse_user_status_rows(db, text, get_lang(request))
+    if not entries:
+        return flash("/admin/users", t.t("msg_no_rows"))
+    return render(request, "admin/user_status_preview.html", user=user, rows=entries,
+                  csv_text=text)
+
+
+@router.post("/users/status/execute")
+def users_status_execute(request: Request, csv_text: str = Form(...),
+                         user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    msg = execute_user_status_import(db, csv_text, user, get_lang(request))
+    return flash("/admin/users", msg)
+
+
 # ---------- curves ----------
 
 @router.get("/curves")
@@ -202,9 +231,11 @@ def curves_save(request: Request, cid: int = Form(0), name: str = Form(...), poi
     t = _t(request)
     try:
         points = parse_points(points_text)
+        cap = parse_cap(cap_pct)
+    except IntegerRequired as e:
+        return flash("/admin/curves", str(e))
     except ValueError as e:
         return flash("/admin/curves", str(e))
-    cap = float(cap_pct) if cap_pct.strip() else None
     curve = db.get(Curve, cid) if cid else Curve(created_by=user.id)
     name_query = select(Curve).where(Curve.name == name)
     if cid:
@@ -215,6 +246,24 @@ def curves_save(request: Request, cid: int = Form(0), name: str = Form(...), poi
     db.add(curve)
     db.commit()
     return flash("/admin/curves", t.t("msg_curve_saved", name=name))
+
+
+@router.post("/curves/{cid}/toggle")
+def curve_toggle(cid: int, request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    """v5.0 #7: retire (or re-activate) a curve. Retired curves reject NEW imports but
+    leave every already-calculated / sealed result unchanged."""
+    t = _t(request)
+    curve = db.get(Curve, cid)
+    if not curve:
+        return flash("/admin/curves", t.t("no_results"))
+    curve.is_active = not curve.is_active
+    db.add(DataOpLog(op_type="UPDATE", entity="curve", entity_ref=curve.name,
+                     reason="retire curve" if not curve.is_active else "reactivate curve",
+                     created_by=user.id))
+    db.commit()
+    msg = t.t("msg_curve_retired", name=curve.name) if not curve.is_active \
+        else t.t("msg_curve_activated", name=curve.name)
+    return flash("/admin/curves", msg)
 
 
 # ---------- unified quarterly big-table import (ADMIN + BG_ADMIN, two-pass) ----------
@@ -235,7 +284,7 @@ def import_template(request: Request, period: str = "",
                     user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
     """Blank template, or prefilled from one of the recent quarters (permission-scoped)."""
     rows = big_template_rows(db, period=period.strip() or None, bg=_import_bg_scope(user),
-                             with_actual=True)
+                             with_actual=True, lang=get_lang(request))
     name = f"quarter_import_template{'_' + period.strip() if period.strip() else ''}.csv"
     return _csv_response(rows, name)
 
@@ -450,21 +499,33 @@ def add_lock(request: Request, period: str = Form(...), bgs: list[str] = Form(de
                                sealed=len(sealed), already=len(already)))
 
 
-# ---------- export (year + BG selectable) ----------
+# ---------- export (year + BG selectable; ADMIN sees all, BG admin is scoped) ----------
+
+def _export_scope(user: User, bg: str | None) -> set[str] | None:
+    """Resolve the effective BG scope for an export: a BG_ADMIN is always confined to
+    their managed BGs; a platform ADMIN may target one BG, many, or all (None)."""
+    scope = bg_filter(user)          # None for ADMIN, set for BG_ADMIN
+    if scope is not None:
+        return scope                 # BG admin: forced to own scope
+    return {bg} if bg else None      # admin: optional single BG or all
+
 
 @router.get("/export")
-def export_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+def export_page(request: Request, user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
     years = sorted({p.split("-")[0] for p in db.scalars(select(CalcRun.period).distinct()).all()},
                    reverse=True)
-    bgs = sorted({u.bg for u in db.scalars(select(User)).all() if u.bg})
-    return render(request, "admin/export.html", user=user, years=years, bgs=bgs)
+    scope = bg_filter(user)
+    bgs = sorted(scope) if scope is not None else sorted(
+        {u.bg for u in db.scalars(select(User)).all() if u.bg})
+    return render(request, "admin/export.html", user=user, years=years, bgs=bgs,
+                  scoped=(scope is not None))
 
 
 @router.get("/export.csv")
 def export_csv(request: Request, period: str | None = None, bg: str | None = None, year: str | None = None,
-               user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    rows = export_results_rows(db, bg=bg or None, period=period or None, year=year or None,
-                               lang=get_lang(request))
+               user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    rows = export_results_rows(db, bg=_export_scope(user, bg), period=period or None,
+                               year=year or None, lang=get_lang(request))
     name = "bonus_results" + (f"_{year}" if year else "") + (f"_{bg}" if bg else "") \
            + (f"_{period}" if period else "") + ".csv"
     return _csv_response(rows, name)
@@ -472,12 +533,28 @@ def export_csv(request: Request, period: str | None = None, bg: str | None = Non
 
 @router.get("/export_kpi.csv")
 def export_kpi_csv(request: Request, period: str | None = None, bg: str | None = None, year: str | None = None,
-                   user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
-    rows = export_kpi_rows(db, bg=bg or None, period=period or None, year=year or None,
+                   user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    rows = export_kpi_rows(db, bg=_export_scope(user, bg), period=period or None, year=year or None,
                            lang=get_lang(request))
     name = "bonus_kpi_detail" + (f"_{year}" if year else "") + (f"_{bg}" if bg else "") \
            + (f"_{period}" if period else "") + ".csv"
     return _csv_response(rows, name)
+
+
+@router.get("/export_plans.csv")
+def export_plans_csv(request: Request, bg: str | None = None,
+                     user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    """v5.0 #12: every plan ever used, with KPI structure, person-quarters and avg rate."""
+    rows = export_plans_rows(db, bg=_export_scope(user, bg), lang=get_lang(request))
+    return _csv_response(rows, "plans_export.csv")
+
+
+@router.get("/export_kpis.csv")
+def export_kpis_csv(request: Request, bg: str | None = None,
+                    user=Depends(require_roles("ADMIN", "BG_ADMIN")), db=Depends(get_db)):
+    """v5.0 #13: every KPI name ever used, with plan count and avg attainment."""
+    rows = export_kpis_rows(db, bg=_export_scope(user, bg), lang=get_lang(request))
+    return _csv_response(rows, "kpis_export.csv")
 
 
 # ---------- language management (translations of DB field values) ----------

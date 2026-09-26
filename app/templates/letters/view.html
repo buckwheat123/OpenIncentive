@@ -3,13 +3,16 @@
 <head>
 <meta charset="utf-8">
 <title>{{ letter.subject }}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=5.1">
 </head>
 <body>
 <main>
-  <div style="text-align:right;margin-bottom:8px" class="lang-switch">
-    <a class="{% if lang == 'zh' %}active{% endif %}" href="/lang/zh">中</a>
-    <a class="{% if lang == 'en' %}active{% endif %}" href="/lang/en">EN</a>
+  <div class="letter-head">
+    <span class="brand-name">{{ t('app_title') }}</span>
+    <div style="text-align:right" class="lang-switch">
+      <a class="{% if lang == 'zh' %}active{% endif %}" href="/lang/zh">中</a>
+      <a class="{% if lang == 'en' %}active{% endif %}" href="/lang/en">EN</a>
+    </div>
   </div>
   {% if request.query_params.get('msg') %}<div class="msg">{{ request.query_params.get('msg') }}</div>{% endif %}
   <div class="card">

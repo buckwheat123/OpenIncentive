@@ -1,5 +1,9 @@
 """Notification letters: templates, compose & send, public read-acknowledgement.
 
+v5.0: letters NO LONGER import their own data. A letter simply renders whatever is
+already in the library for that (recipient, period). Where a quarter has no actuals
+yet (start-of-year before performance lands), the performance-related cells stay blank.
+
 Letter bodies embed per-KPI tables and a Curve table that shows, per interval,
 how much attainment maps to how much payout plus the interval slope.
 """
@@ -8,17 +12,14 @@ import json
 import os
 import secrets
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import Response
 from sqlalchemy import select
 
-from ..csvio import (decode_csv, execute_year_letter_import, letter_summary,
-                     parse_year_letter_rows, recent_years, to_csv,
-                     year_letter_conflict_rows, year_letter_error_rows,
-                     year_letter_template_rows)
-from ..deps import bg_filter, current_user, get_db, require_user, session_payload
-from ..i18n import Translator, get_lang
-from ..mailer import send_mail
+from ..csvio import to_csv
+from ..deps import bg_filter, current_user, get_db, require_user
+from ..i18n import Translator, get_lang, translate_headers
+from ..mailer import send_mail, smtp_enabled
 from ..models import Letter, LetterTemplate, User
 from ..ui import render
 from .auth import flash
@@ -87,7 +88,11 @@ def build_performance_table(db, recipient: User, period: str, tr: Translator) ->
     """Per-KPI performance breakdown (feature #10): weight / target / actual /
     attainment / curve / raw payout rate / weighted contribution. Weighted
     contribution = weight% / 100 * raw rate, matching the platform's locked
-    weighted-rate convention (Σ contribution, no renormalisation)."""
+    weighted-rate convention (Σ contribution, no renormalisation).
+
+    v5.0: a KPI with no actual yet (a fresh quarter before performance data lands)
+    leaves its actual / attainment / rate / contribution cells BLANK — not "-" and
+    not 0 — so nothing implies the person was measured."""
     plan = plan_for(db, recipient.id, period)
     if not plan:
         return ""
@@ -95,9 +100,11 @@ def build_performance_table(db, recipient: User, period: str, tr: Translator) ->
     detail = {d["kpi"]: d for d in (json.loads(result.detail_json) if result else [])}
     rows = ""
     total_contrib = 0.0
+    has_any_actual = False
     for kpi in plan.kpis:
         d = detail.get(kpi.kpi_name)
         if d and d.get("actual") is not None:
+            has_any_actual = True
             actual = f"{d['actual']:,.2f}"
             attain = f"{d['attainment_pct']:.1f}%"
             raw = d["rate_pct"]
@@ -105,15 +112,16 @@ def build_performance_table(db, recipient: User, period: str, tr: Translator) ->
             total_contrib += contrib
             raw_s, contrib_s = f"{raw:.1f}%", f"{contrib:.2f}%"
         else:
-            actual, attain, raw_s, contrib_s = "-", "-", "-", "-"
+            actual = attain = raw_s = contrib_s = ""   # v5.0 blank — no performance data
         rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{kpi.weight_pct:g}%</td>"
                  f"<td>{kpi.quota:,.2f}</td><td>{actual}</td><td>{attain}</td>"
                  f"<td>{tr.tl(kpi.curve.name)}</td><td>{raw_s}</td><td>{contrib_s}</td></tr>")
     summary = ""
-    if result:
+    if result and has_any_actual:
         adj = (f"　{tr.t('special_adjust')}：{result.adjustment_pct:+.2f} pp" if result.adjusted else "")
-        summary = (f"<p><strong>{tr.t('weighted_rate')}：{result.weighted_rate_pct:.2f}%{adj}　"
-                   f"{tr.t('quarter_total_rate')}：{result.final_rate_pct:.2f}%</strong></p>")
+        final_part = (f"　{tr.t('quarter_total_rate')}：{result.final_rate_pct:.2f}%" if result.adjusted else "")
+        summary = (f"<p><strong>{tr.t('weighted_rate')}：{result.weighted_rate_pct:.2f}%{adj}"
+                   f"{final_part}</strong></p>")
     return (f"<table {TABLE_STYLE}>"
             f"<tr><th>KPI</th><th>{tr.t('weight_col')}</th><th>{tr.t('target')}</th>"
             f"<th>{tr.t('actual_col')}</th><th>{tr.t('attainment')}</th>"
@@ -150,11 +158,12 @@ def build_curve_summary(db, recipient: User, period: str, tr: Translator) -> str
     return "".join(parts)
 
 
-def render_letter_body(db, template: LetterTemplate, recipient: User, period: str,
-                       message: str, token: str, tr: Translator) -> str:
-    body = template.body_html
+def letter_substitutions(db, recipient: User, period: str, message: str,
+                         tr: Translator) -> dict:
+    """Scalar (non-table) placeholders, shared by BOTH subject and body so the subject
+    line can use {{PERIOD}} / {{NAME}} etc. (v5.0 #15 — the reported subject bug)."""
     plan = plan_for(db, recipient.id, period)
-    substitutions = {
+    return {
         "{{NAME}}": recipient.name,
         "{{EMPLOYEE_ID}}": recipient.employee_id,
         "{{EMAIL}}": recipient.email or "",
@@ -165,10 +174,28 @@ def render_letter_body(db, template: LetterTemplate, recipient: User, period: st
         "{{PERIOD}}": period,
         "{{PLAN_NAME}}": (tr.tl(plan.plan_name) if plan else ""),
         "{{MESSAGE}}": message or "",
+    }
+
+
+def render_letter_subject(db, template: LetterTemplate, recipient: User, period: str,
+                          message: str, tr: Translator) -> str:
+    """v5.0 #15: expand placeholders in the SUBJECT line (previously stored raw, which is
+    why '{{PERIOD}} 奖金通知' showed literally)."""
+    subject = template.subject
+    for key, value in letter_substitutions(db, recipient, period, message, tr).items():
+        subject = subject.replace(key, value)
+    return subject
+
+
+def render_letter_body(db, template: LetterTemplate, recipient: User, period: str,
+                       message: str, token: str, tr: Translator) -> str:
+    body = template.body_html
+    substitutions = letter_substitutions(db, recipient, period, message, tr)
+    substitutions.update({
         "{{PLAN_TABLE}}": build_plan_table(db, recipient, period, tr),
         "{{PERFORMANCE_TABLE}}": build_performance_table(db, recipient, period, tr),
         "{{CURVE_SUMMARY}}": build_curve_summary(db, recipient, period, tr),
-    }
+    })
     for key, value in substitutions.items():
         body = body.replace(key, value)
     ack_url = f"{BASE_URL}/letter/{token}"
@@ -180,99 +207,54 @@ def render_letter_body(db, template: LetterTemplate, recipient: User, period: st
 # ---------- letter log ----------
 
 @router.get("/letters")
-def letters_log(request: Request, user: User = Depends(require_user), db=Depends(get_db)):
+def letters_log(request: Request, period: str = "", user: User = Depends(require_user), db=Depends(get_db)):
     if not _allowed(user):
         return flash("/", Translator(get_lang(request)).t("no_permission"))
     stmt = select(Letter).order_by(Letter.sent_at.desc(), Letter.id.desc())
+    if period.strip():
+        stmt = stmt.where(Letter.period == period.strip())
     scope = _scope_bg(user)
     if scope is not None:
         letters = [l for l in db.scalars(stmt).all() if l.recipient and l.recipient.bg in scope]
     else:
         letters = db.scalars(stmt).all()
-    return render(request, "letters/log.html", user=user, letters=letters)
+    return render(request, "letters/log.html", user=user, letters=letters,
+                  periods=all_periods(db), period=period.strip(), scope=scope)
 
 
-# ---------- letter data import (same sheet as the calculation import, minus actual) ----------
-
-def _csv_response(rows: list[list], filename: str) -> Response:
+@router.get("/letters/export.csv")
+def letters_export(request: Request, period: str = "", user: User = Depends(require_user), db=Depends(get_db)):
+    """v5.0 #16: export the (scoped) letter log — all periods or one chosen quarter."""
+    t = Translator(get_lang(request))
+    if not _allowed(user):
+        return flash("/", t.t("no_permission"))
+    stmt = select(Letter).order_by(Letter.sent_at.desc(), Letter.id.desc())
+    p = period.strip()
+    if p:
+        stmt = stmt.where(Letter.period == p)
+    scope = _scope_bg(user)
+    header = translate_headers(
+        ["token", "recipient_employee_id", "recipient_name", "bg", "period",
+         "template_name", "subject", "send_mode", "sent_at", "read_at"], get_lang(request))
+    rows = [header]
+    for l in db.scalars(stmt).all():
+        if scope is not None and (not l.recipient or l.recipient.bg not in scope):
+            continue
+        rows.append([
+            l.token,
+            l.recipient.employee_id if l.recipient else "",
+            l.recipient.name if l.recipient else "",
+            l.recipient.bg if l.recipient else "",
+            l.period, l.template_name, l.subject, l.send_mode,
+            l.sent_at.strftime("%Y-%m-%d %H:%M") if l.sent_at else "",
+            l.read_at.strftime("%Y-%m-%d %H:%M") if l.read_at else "",
+        ])
+    name = "letters" + (f"_{p}" if p else "_all") + ".csv"
     return Response(
         "\ufeff" + to_csv(rows),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
-
-
-@router.get("/letters/data")
-def letter_data_page(request: Request, user: User = Depends(require_user), db=Depends(get_db)):
-    if not _allowed(user):
-        return flash("/", Translator(get_lang(request)).t("no_permission"))
-    return render(request, "letters/data.html", user=user, years=recent_years(db))
-
-
-@router.get("/letters/data/template.csv")
-def letter_data_template(request: Request, year: str = "",
-                         user: User = Depends(require_user), db=Depends(get_db)):
-    if not _allowed(user):
-        return flash("/", Translator(get_lang(request)).t("no_permission"))
-    rows = year_letter_template_rows(db, year=year.strip() or None, bg=_scope_bg(user))
-    name = f"letter_data_template{'_' + year.strip() if year.strip() else ''}.csv"
-    return _csv_response(rows, name)
-
-
-@router.post("/letters/data/preview")
-async def letter_data_preview(request: Request, file: UploadFile | None = None,
-                              user: User = Depends(require_user), db=Depends(get_db)):
-    t = Translator(get_lang(request))
-    if not _allowed(user):
-        return flash("/", t.t("no_permission"))
-    if file is None or not file.filename:
-        return flash("/letters/data", t.t("msg_no_file"))
-    text = decode_csv(await file.read())
-    entries = parse_year_letter_rows(db, text, user, get_lang(request))
-    if not entries:
-        return flash("/letters/data", t.t("msg_no_rows"))
-    return render(request, "import_preview.html", user=user, rows=entries, csv_text=text,
-                  summary=letter_summary(entries), with_actual=False,
-                  execute_url="/letters/data/execute", errors_url="/letters/data/errors.csv",
-                  conflicts_url="/letters/data/conflicts.csv", back_url="/letters/data")
-
-
-@router.post("/letters/data/execute")
-def letter_data_execute(request: Request, csv_text: str = Form(...),
-                        user: User = Depends(require_user), db=Depends(get_db)):
-    t = Translator(get_lang(request))
-    if not _allowed(user):
-        return flash("/", t.t("no_permission"))
-    payload = session_payload(request) or {}
-    proxy_note = ""
-    if payload.get("p"):
-        original = db.get(User, payload["p"])
-        if original:
-            proxy_note = f"proxy by {original.employee_id}"
-    msg = execute_year_letter_import(db, csv_text, user, get_lang(request),
-                                     proxy_note=proxy_note)
-    return flash("/letters/data", msg)
-
-
-@router.post("/letters/data/errors.csv")
-def letter_data_errors(request: Request, csv_text: str = Form(...),
-                       user: User = Depends(require_user), db=Depends(get_db)):
-    if not _allowed(user):
-        return flash("/", Translator(get_lang(request)).t("no_permission"))
-    rows = year_letter_error_rows(db, csv_text, user, get_lang(request))
-    return _csv_response(rows, "letter_data_errors.csv")
-
-
-@router.post("/letters/data/conflicts.csv")
-def letter_data_conflicts(request: Request, csv_text: str = Form(...),
-                          user: User = Depends(require_user), db=Depends(get_db)):
-    """Download the conflict list: letter rows whose quota disagrees with the existing
-    quarterly calculation data (feature #10 / Batch E2b). Each row shows the incoming
-    YTD targets plus the quarterly values already stored, so they can be reconciled."""
-    if not _allowed(user):
-        return flash("/", Translator(get_lang(request)).t("no_permission"))
-    rows = year_letter_conflict_rows(db, csv_text, user, get_lang(request))
-    return _csv_response(rows, "letter_data_conflicts.csv")
 
 
 # ---------- templates ----------
@@ -393,20 +375,36 @@ def send(request: Request, template_id: int = Form(...), period: str = Form(...)
         return flash("/letters/compose", t.t("msg_need_recipient"))
     scope = _scope_bg(user)
     sent = 0
+    any_smtp = False
     for uid in recipients:
         recipient = db.get(User, uid)
         if not recipient or (scope is not None and recipient.bg not in scope):
             continue
         token = secrets.token_urlsafe(16)
+        subject = render_letter_subject(db, template, recipient, period, message, t)
         body = render_letter_body(db, template, recipient, period, message, token, t)
-        mode = send_mail(recipient.email, template.subject, body)
+        mode = send_mail(recipient.email, subject, body)
+        any_smtp = any_smtp or mode == "smtp"
         db.add(Letter(token=token, template_id=template.id, template_name=template.name,
-                      recipient_id=recipient.id, period=period, subject=template.subject,
+                      recipient_id=recipient.id, period=period, subject=subject,
                       body_html=body, sent_by=user.id, send_mode=mode))
         sent += 1
     db.commit()
-    mode_note = t.t("msg_smtp_on") if os.environ.get("SMTP_HOST") else t.t("msg_smtp_off")
+    mode_note = t.t("msg_smtp_on") if any_smtp or smtp_enabled() else t.t("msg_smtp_off")
     return flash("/letters", t.t("msg_sent", n=sent, mode=mode_note))
+
+
+@router.post("/letters/mailtest")
+def mailtest(request: Request, user=Depends(require_user), db=Depends(get_db)):
+    """Ping the configured mail transports (no message sent) and report back."""
+    t = Translator(get_lang(request))
+    if not _allowed(user):
+        return flash("/", t.t("no_permission"))
+    from ..mailer import test_connection
+
+    results = test_connection()
+    lines = [f"{'✅' if r['ok'] else '❌'} {r['transport'].upper()}：{r['detail']}" for r in results]
+    return flash("/letters/compose", "\n".join(lines))
 
 
 # ---------- public letter view & acknowledgement ----------

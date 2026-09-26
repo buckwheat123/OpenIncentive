@@ -1,11 +1,17 @@
 """End-to-end test against the running dev server (http://127.0.0.1:8000).
 
-Run order:  .venv/Scripts/python seed.py   then start server   then  .venv/Scripts/python tests/test_e2e.py
+Run order:  .venv/Scripts/python seed.py   then start server   then
+            SMTP_DISABLED=1 .venv/Scripts/python tests/test_e2e.py
+            (SMTP_DISABLED keeps the mailer in deterministic outbox mode; launch the
+             server itself with SMTP_DISABLED=1 too so letters never hit the network.)
 
-Covers the v4 unified quarterly big-table import (one sheet, two-pass, validation +
-identical-ignore), template download with recent-quarter prefill & BG scoping, the
-separate letter-data import screen, platform-admin proxy of a BG admin, calculation,
-adjustments, seals, export, letters, i18n and role-scoped views.
+v5.0 coverage: unified quarterly big-table import (two-pass, validation + identical
+ignore), template download with recent-quarter prefill & BG scoping, GLOBAL plan-name
+uniqueness across BG/quarter (#11), curve integer enforcement (#6) and retire/reject (#7),
+calculation with point-in-time snapshots (#4), additive + batch adjustments, seals,
+YTD-weighted-rate terminology (#8), result / plan / KPI exports (#12/#13), user roster
+export + batch enable/disable (#5), letter log export (#16) and the mail-test action (#17),
+shared templates, proxy, i18n, role-scoped views and blank-before-actual cells (#1).
 """
 
 import pathlib
@@ -17,7 +23,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.db import SessionLocal  # noqa: E402
-from app.models import Actual, BonusPlan, BonusResult, CalcRun, DataOpLog, Letter, LetterTemplate, User  # noqa: E402
+from app.models import (Actual, BonusPlan, BonusResult, CalcRun, Curve,  # noqa: E402
+                        DataOpLog, Letter, LetterTemplate, User)
 
 BASE = "http://127.0.0.1:8000"
 
@@ -44,14 +51,6 @@ QUARTER_CSV = "\n".join([
     "2027-Q1,E002,李娜,,,,,,,Sales Incentive,ExtraKpi,50,100,CurveX,50",                    # curve not found
 ]) + "\n"
 
-# Letter-data sheet (same columns minus `actual`) for a fresh person/period.
-LETTER_HEADER = BIG_HEADER.rsplit(",actual", 1)[0]
-LETTER_CSV = "\n".join([
-    LETTER_HEADER,
-    "2027-Q2,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,Sales Incentive,Revenue,60,900000,Standard Curve",
-    "2027-Q2,E003,赵磊,,,,,,,Sales Incentive,Customer Satisfaction,40,90,Quality Curve",
-]) + "\n"
-
 # BG-scope probe: E001 (Retail, in scope) + E004 (Commercial, in scope via BGA1's 2nd BG)
 # + E900 (HR, out of scope for BGA1 even though BGA1 manages two BGs).
 BG_SCOPE_CSV = "\n".join([
@@ -61,60 +60,30 @@ BG_SCOPE_CSV = "\n".join([
     "2027-Q3,E900,周敏,zhou.min@example.com,HR,People,HRBP,M900,EMPLOYEE,Sales Incentive,Revenue,60,800000,Standard Curve,700000",
 ]) + "\n"
 
-# Year-format letter-data sheet (feature #10 / Batch E2a): one row per KPI with four
-# YTD target columns. E003 fills only Q1 and Q3 of 2028 → the importer expands this into
-# two per-quarter plans (2028-Q1, 2028-Q3) and skips the blank Q2/Q4.
-YEAR_HEADER = ("year,employee_id,name,email,bg,department,job_title,manager_id,role,"
-               "plan_name,kpi_name,weight_pct,curve_name,ytd_q1,ytd_q2,ytd_q3,ytd_q4")
-YEAR_LETTER_CSV = "\n".join([
-    YEAR_HEADER,
-    "2028,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,"
-    "Sales Incentive,Revenue,60,Standard Curve,1000000,,1400000,",
-    "2028,E003,赵磊,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,,95,",
+# v5.0 #7 retire probe: a single KPI row that references a curve the test creates and
+# then retires. Once retired, the importer must reject it with "该Curve已停用，请联系ADM".
+RETIRED_PROBE_CSV = "\n".join([
+    BIG_HEADER,
+    "2031-Q1,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,Retire Test,Revenue,100,1000000,Retire Me Curve,900000",
 ]) + "\n"
 
-# Conflict probe (Batch E2b): E001's 2026 Sales Incentive/Revenue plan already exists
-# with quarterly targets 2600000 (Q2) / 3900000 (Q3), weights 60/40. (2026-Q1 is sealed
-# by test [9], so we use the unsealed Q2/Q3.) Weights stay 60/40 so the plan name is not
-# re-suffixed by F5 and the quota conflict is detected against the real "Sales Incentive".
-#   * 2026-Q2 → quotas disagree (999999 / 5) → BOTH rows conflict-blocked (calc is authority)
-#   * 2026-Q3 → quotas match exactly (3900000 / 90) → identical, silently ignored
-#   * 2029-Q1 → a brand-new quarter with no calc data → imports cleanly as the one new
-#               version, proving non-conflicting letter data still lands. Each employee/
-#               period/plan group totals 100%, so F1 never rejects E001 here.
-CONFLICT_YEAR_CSV = "\n".join([
-    YEAR_HEADER,
-    "2026,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,"
-    "Sales Incentive,Revenue,60,Standard Curve,,999999,3900000,",
-    "2026,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,,5,90,",
-    "2029,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,"
-    "Sales Incentive,Revenue,60,Standard Curve,800000,,,",
-    "2029,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,85,,,",
-]) + "\n"
-
-
-# F1 weight-rejection probe (letter/year format): E002's Sales Incentive only reaches
-# 60% (no CS) -> the WHOLE employee is rejected; E004's plan totals 100% -> imports fine.
-WEIGHT_REJECT_CSV = "\n".join([
-    YEAR_HEADER,
-    "2028,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,"
-    "Sales Incentive,Revenue,60,Standard Curve,1000000,,,",
-    "2028,E004,陈静,chen.jing@example.com,Commercial,Commercial Sales,商务专员,M002,EMPLOYEE,"
-    "Sales Incentive,Revenue,60,Standard Curve,1100000,,,",
-    "2028,E004,陈静,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,,,",
-]) + "\n"
-
-# F5 plan-uniqueness probe (big-table format, fresh period 2030-Q1): the same KPI/Curve/
-# weight combination must map to exactly one plan name within a period (cross-BG). E001
-# registers "Alpha Plan"; E002 declares the identical combo as "Beta Plan" (-> renamed to
-# Alpha Plan); E003 reuses "Alpha Plan" for a different combo (-> auto-suffixed Alpha Plan_v1).
+# F5 GLOBAL plan-uniqueness probe (v5.0 #11, big-table format, fresh period 2030-Q1):
+# a (KPI, weight, Curve) combo maps to exactly ONE canonical name ACROSS every BG and
+# quarter. Combos below deliberately differ from the seeded plans (Sales Incentive =
+# Revenue60/Std + CS40/Qual; Quality Bonus = CS100/Qual) so the rename/suffix logic is
+# exercised against a clean slate:
+#   * E001 registers combo A (Rev70/Std + CS30/Qual) as "Alpha Plan".
+#   * E002 declares the SAME combo A but names it "Beta Plan"  -> adopted name "Alpha Plan".
+#   * E003 reuses the NAME "Alpha Plan" for a DIFFERENT combo B (Rev50/Std + CS50/Qual)
+#     -> the name is already taken, so E003 is auto-suffixed to "Alpha Plan_v1".
 F5_CSV = "\n".join([
     BIG_HEADER,
-    "2030-Q1,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Alpha Plan,Revenue,60,1000000,Standard Curve,900000",
-    "2030-Q1,E001,张伟,,,,,,,Alpha Plan,Customer Satisfaction,40,90,Quality Curve,92",
-    "2030-Q1,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Beta Plan,Revenue,60,1000000,Standard Curve,950000",
-    "2030-Q1,E002,李娜,,,,,,,Beta Plan,Customer Satisfaction,40,90,Quality Curve,88",
-    "2030-Q1,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,Alpha Plan,Customer Satisfaction,100,90,Quality Curve,90",
+    "2030-Q1,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Alpha Plan,Revenue,70,1000000,Standard Curve,900000",
+    "2030-Q1,E001,张伟,,,,,,,Alpha Plan,Customer Satisfaction,30,90,Quality Curve,92",
+    "2030-Q1,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Beta Plan,Revenue,70,1000000,Standard Curve,950000",
+    "2030-Q1,E002,李娜,,,,,,,Beta Plan,Customer Satisfaction,30,90,Quality Curve,88",
+    "2030-Q1,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,Alpha Plan,Revenue,50,1000000,Standard Curve,900000",
+    "2030-Q1,E003,赵磊,,,,,,,Alpha Plan,Customer Satisfaction,50,90,Quality Curve,90",
 ]) + "\n"
 
 
@@ -133,8 +102,31 @@ def main():
         login(c, "ADMIN1", "admin123")
         assert "管理后台" in c.get(f"{BASE}/admin").text
         import_page = c.get(f"{BASE}/admin/import").text
-        assert "季度大表导入" in import_page and "空白模板" in import_page
+        assert "主表格导入" in import_page and "空白模板" in import_page
         print("[1] admin login, dashboard & import page OK")
+
+        # ---- v5.0 #8 YTD terminology + #14 self view hides change history (EARLY) ------
+        # Run before any later-year (2027/2030) plan exists, so 2026 is still each probe
+        # employee's latest data year and the /me year picker resolves ?year=2026 (an
+        # out-of-range year would silently fall back to the latest, hiding the 2026 rows).
+        # E001 has NO special adjustment in 2026 → weighted line shows, adjusted line does
+        # NOT; E003 got a seeded +10pp in 2026-Q3 → the adjusted line DOES show. The
+        # unweighted rate is never surfaced anywhere, and the employee self view never
+        # exposes the information-change history.
+        with httpx.Client(follow_redirects=True, timeout=30) as emp:
+            login(emp, "E001", "E001")
+            me26 = emp.get(f"{BASE}/me?year=2026").text
+            assert "YTD加权支付率" in me26
+            assert "（经特殊调整后）" not in me26                   # no adjustment for E001 in 2026
+            assert "未加权" not in me26
+            assert "信息变更历史" not in me26                       # req 14: self view hides history
+            login(emp, "E003", "E003")
+            me3 = emp.get(f"{BASE}/me?year=2026").text
+            assert "YTD加权支付率" in me3
+            assert "（经特殊调整后）" in me3                          # req 8: seeded +10pp line
+            assert "未加权" not in me3
+            assert "信息变更历史" not in me3
+        print("[1b] v5.0 employee view: YTD terms (#8), adjusted line only when present, hides history (#14) OK")
 
         # ---- unified big-table import: pass-1 validation ----
         r = upload(c, f"{BASE}/admin/import/preview", QUARTER_CSV)
@@ -183,7 +175,8 @@ def main():
 
         # ---- template download: blank vs prefilled from a recent quarter ----
         blank = c.get(f"{BASE}/admin/import/template.csv").text
-        assert "employee_id" in blank and "actual" in blank
+        # v5.0 #2: template column headers are localized (zh by default).
+        assert "工号" in blank and "实绩" in blank
         assert len([ln for ln in blank.splitlines() if ln.strip()]) == 1   # header only
         prefilled = c.get(f"{BASE}/admin/import/template.csv?period=2027-Q1").text
         assert "E001" in prefilled and "1150000" in prefilled
@@ -248,24 +241,25 @@ def main():
         export_page = c.get(f"{BASE}/admin/export").text
         assert "导出全部结果" in export_page and "全部年份" in export_page and "全部 BG" in export_page
         assert "总支付率" in export_page and "各 KPI 明细" in export_page   # two-sheet UI
-        # sheet 1: total rate per person/plan
+        # sheet 1: total rate per person/plan (headers localized, v5.0 #2)
         r = c.get(f"{BASE}/admin/export.csv?year=2026&bg=Retail")
-        assert r.status_code == 200 and "plan_name" in r.text and "weighted_rate_pct" in r.text
+        assert r.status_code == 200 and "计划名" in r.text and "YTD加权支付率" in r.text
         assert "bonus_amount" not in r.text
-        assert "comment" in r.text and "weight_total_pct" in r.text   # weighted-only + comment column
-        assert "unweighted_rate_pct" not in r.text                    # unweighted rate removed
-        assert "kpi_name" not in r.text                               # sheet 1 is NOT per-KPI
+        assert "备注" in r.text and "权重合计" in r.text             # weighted-only + comment column
+        assert "未加权" not in r.text                                 # unweighted rate removed
+        assert "KPI 名" not in r.text                                 # sheet 1 is NOT per-KPI
         assert "E001" in r.text and "E004" not in r.text    # Commercial excluded by BG filter
         # sheet 2: per-KPI detail
         rk = c.get(f"{BASE}/admin/export_kpi.csv?year=2026&bg=Retail")
         assert rk.status_code == 200
-        assert "kpi_name" in rk.text and "attainment_pct" in rk.text and "rate_pct" in rk.text
-        assert "curve_name" in rk.text and "weight_pct" in rk.text
-        assert "weighted_rate_pct" not in rk.text.splitlines()[0]     # no total-rate columns in header
+        assert "KPI 名" in rk.text and "达成率%" in rk.text and "支付率%" in rk.text
+        assert "Curve 名" in rk.text and "权重%" in rk.text
+        assert "YTD加权支付率" not in rk.text.splitlines()[0]          # no total-rate columns in header
         assert "E001" in rk.text and "E004" not in rk.text            # same BG filter
         print("[12] export page + two-sheet (total rate + per-KPI) export OK")
 
-        # ---- F5 plan-uniqueness: same combo -> one name (rename); same name/diff combo -> suffix ----
+        # ---- F5 GLOBAL plan-uniqueness (#11): same combo -> one name (rename) ----
+        # ---- regardless of BG/quarter; same name/different combo -> auto-suffix ----
         r = upload(c, f"{BASE}/admin/import/preview", F5_CSV)
         assert "计划名将从「Beta Plan」改为「Alpha Plan」" in r.text, r.text[:800]   # E002 renamed
         assert "Alpha Plan_v1" in r.text, r.text[:800]                        # E003 auto-suffixed
@@ -283,83 +277,90 @@ def main():
                                            plan_name="Alpha Plan_v1", is_current=True).first()
         assert p1 and p2 and p3                                 # E002 landed under Alpha Plan
         assert db.query(BonusPlan).filter_by(plan_name="Beta Plan").first() is None   # never stored
-        print("[12b] F5 plan-uniqueness (rename identical combo, suffix clashing name) OK")
-
-        # ---- letter-data import screen (separate, no actual column) ----
-        data_page = c.get(f"{BASE}/letters/data").text
-        assert "通知信数据导入" in data_page
-        lt = c.get(f"{BASE}/letters/data/template.csv").text
-        assert "employee_id" in lt and "actual" not in lt.splitlines()[0]   # no actual column
-        r = upload(c, f"{BASE}/letters/data/preview", LETTER_CSV)
-        assert "预览校验结果" in r.text and "可导入" in r.text, r.text[:600]
-        r = c.post(f"{BASE}/letters/data/execute", data={"csv_text": LETTER_CSV})
-        assert "导入完成" in r.text and "计划新版本 1 个" in r.text, r.text[:600]
+        # Cross-BG + cross-quarter sharing: E004 (Commercial) in a NEW quarter (2030-Q2)
+        # declaring the SAME combo A under a fresh name must adopt "Alpha Plan".
+        gamma_csv = "\n".join([
+            BIG_HEADER,
+            "2030-Q2,E004,陈静,chen.jing@example.com,Commercial,Commercial Sales,商务专员,M002,EMPLOYEE,Gamma Plan,Revenue,70,1000000,Standard Curve,900000",
+            "2030-Q2,E004,陈静,,,,,,,Gamma Plan,Customer Satisfaction,30,90,Quality Curve,90",
+        ]) + "\n"
+        r = upload(c, f"{BASE}/admin/import/preview", gamma_csv)
+        assert "计划名将从「Gamma Plan」改为「Alpha Plan」" in r.text, r.text[:800]   # cross-BG/quarter
+        r = c.post(f"{BASE}/admin/import/execute", data={"csv_text": gamma_csv})
         db.expire_all()
-        e003 = db.query(User).filter_by(employee_id="E003").first()
-        lp = db.query(BonusPlan).filter_by(period="2027-Q2", employee_id=e003.id,
-                                           plan_name="Sales Incentive", is_current=True).first()
-        assert lp and len(lp.kpis) == 2
-        no_actual = db.query(Actual).filter_by(period="2027-Q2", employee_id=e003.id).first()
-        assert no_actual is None                            # letter data carries no actuals
-        print("[13] letter-data import (separate screen, no actual) OK")
-
-        # ---- year-format letter-data import (feature #10 / Batch E2a) ----
-        yt = c.get(f"{BASE}/letters/data/template.csv").text.lstrip("\ufeff")
-        assert "ytd_q1" in yt and "ytd_q4" in yt and yt.splitlines()[0].startswith("year")
-        ypre = c.get(f"{BASE}/letters/data/template.csv?year=2026").text   # real prefill
-        assert "E001" in ypre and "ytd_q" in ypre            # 2026 plans laid out by year
-        yr = upload(c, f"{BASE}/letters/data/preview", YEAR_LETTER_CSV)
-        assert "预览校验结果" in yr.text and "可导入" in yr.text, yr.text[:600]
-        # one year row expands into two quarterly rows (2028-Q1 + 2028-Q3)
-        assert yr.text.count("2028-Q1") >= 1 and yr.text.count("2028-Q3") >= 1
-        assert "2028-Q2" not in yr.text and "2028-Q4" not in yr.text   # blank quarters skipped
-        yr_ex = c.post(f"{BASE}/letters/data/execute", data={"csv_text": YEAR_LETTER_CSV})
-        assert "计划新版本 2 个" in yr_ex.text, yr_ex.text[:600]
-        db.expire_all()
-        e003 = db.query(User).filter_by(employee_id="E003").first()
-        q1 = db.query(BonusPlan).filter_by(period="2028-Q1", employee_id=e003.id,
-                                           plan_name="Sales Incentive", is_current=True).first()
-        q3 = db.query(BonusPlan).filter_by(period="2028-Q3", employee_id=e003.id,
-                                           plan_name="Sales Incentive", is_current=True).first()
-        assert q1 and q1.kpis[0].quota == 1000000
-        assert q3 and q3.kpis[0].quota == 1400000
-        assert db.query(BonusPlan).filter_by(period="2028-Q2", employee_id=e003.id).first() is None
-        print("[13b] year-format letter-data import (YTD cols → quarterly plans) OK")
-
-        # ---- conflict detection: letter vs existing quarterly calc (Batch E2b) ----
-        e001 = db.query(User).filter_by(employee_id="E001").first()
-        q2_before = db.query(BonusPlan).filter_by(period="2026-Q2", employee_id=e001.id,
-                                                  plan_name="Sales Incentive", is_current=True).first()
-        assert next(k for k in q2_before.kpis if k.kpi_name == "Revenue").quota == 2600000
-        cf = upload(c, f"{BASE}/letters/data/preview", CONFLICT_YEAR_CSV)
-        assert "与季度计算数据冲突" in cf.text, cf.text[:600]      # Q2 blocked
-        assert "冲突清单" in cf.text                              # dedicated download button shown
-        cfr = c.post(f"{BASE}/letters/data/conflicts.csv", data={"csv_text": CONFLICT_YEAR_CSV})
-        assert cfr.status_code == 200 and "existing_q2" in cfr.text
-        assert "2600000" in cfr.text and "999999" in cfr.text     # sheet value vs letter value
-        cf_ex = c.post(f"{BASE}/letters/data/execute", data={"csv_text": CONFLICT_YEAR_CSV})
-        assert "计划新版本 1 个" in cf_ex.text, cf_ex.text[:600]   # only non-conflicting Q3 lands
-        db.expire_all()
-        q2_after = db.query(BonusPlan).filter_by(period="2026-Q2", employee_id=e001.id,
-                                                 plan_name="Sales Incentive", is_current=True).first()
-        assert next(k for k in q2_after.kpis if k.kpi_name == "Revenue").quota == 2600000  # untouched
-        assert q2_after.version == q2_before.version              # no new Q2 version created
-        print("[13c] letter-vs-calc conflict blocked + conflict CSV exported OK")
-
-        # ---- F1 letter weight rule: a plan not totaling 100% rejects the WHOLE employee ----
-        r = upload(c, f"{BASE}/letters/data/preview", WEIGHT_REJECT_CSV)
-        assert "权重合计不是 100%" in r.text, r.text[:800]      # E002 (60% only) flagged
-        assert "可导入" in r.text                              # E004 (60+40=100) still importable
-        r = c.post(f"{BASE}/letters/data/execute", data={"csv_text": WEIGHT_REJECT_CSV})
-        assert "计划新版本 1 个" in r.text, r.text[:600]        # only E004 lands
-        db.expire_all()
-        e002 = db.query(User).filter_by(employee_id="E002").first()
         e004 = db.query(User).filter_by(employee_id="E004").first()
-        assert db.query(BonusPlan).filter_by(period="2028-Q1", employee_id=e002.id).first() is None  # rejected
-        ok4 = db.query(BonusPlan).filter_by(period="2028-Q1", employee_id=e004.id,
-                                            plan_name="Sales Incentive", is_current=True).first()
-        assert ok4 and len(ok4.kpis) == 2
-        print("[13d] F1 letter weight!=100% rejects the whole employee (others import) OK")
+        pg = db.query(BonusPlan).filter_by(period="2030-Q2", employee_id=e004.id,
+                                           plan_name="Alpha Plan", is_current=True).first()
+        assert pg and db.query(BonusPlan).filter_by(plan_name="Gamma Plan").first() is None
+        print("[12b] F5 GLOBAL plan-uniqueness (#11: cross-BG/quarter rename + suffix) OK")
+
+        # ---- v5.0 #6 curve integer enforcement + #7 retire / reject --------------------
+        # (a) Fractional breakpoints or caps are refused with the "请以整数格式输入" hint
+        #     and nothing is stored.
+        r = c.post(f"{BASE}/admin/curves", data={
+            "cid": 0, "name": "Fractional Curve", "points_text": "0:0, 80.5:50, 100:100",
+            "cap_pct": "200", "description": "x"}, follow_redirects=True)
+        assert "请以整数格式输入" in r.text, r.text[:400]
+        assert db.query(Curve).filter_by(name="Fractional Curve").first() is None
+        r = c.post(f"{BASE}/admin/curves", data={
+            "cid": 0, "name": "Fractional Cap", "points_text": "0:0, 100:100",
+            "cap_pct": "150.5", "description": "x"}, follow_redirects=True)
+        assert "请以整数格式输入" in r.text, r.text[:400]
+        assert db.query(Curve).filter_by(name="Fractional Cap").first() is None
+        # (b) Create a valid curve, confirm the probe row imports, then RETIRE it and watch
+        #     the same row get rejected with "该Curve已停用，请联系ADM".
+        r = c.post(f"{BASE}/admin/curves", data={
+            "cid": 0, "name": "Retire Me Curve", "points_text": "0:0, 100:100",
+            "cap_pct": "200", "description": "临时曲线"}, follow_redirects=True)
+        assert "已保存" in r.text, r.text[:400]
+        db.expire_all()
+        tmp_curve = db.query(Curve).filter_by(name="Retire Me Curve").first()
+        assert tmp_curve and tmp_curve.is_active
+        r = upload(c, f"{BASE}/admin/import/preview", RETIRED_PROBE_CSV)
+        assert "可导入" in r.text, r.text[:400]                    # active → importable
+        r = c.post(f"{BASE}/admin/curves/{tmp_curve.id}/toggle", follow_redirects=True)
+        assert "已停用" in r.text, r.text[:400]
+        db.expire_all()
+        assert db.get(Curve, tmp_curve.id).is_active is False
+        r = upload(c, f"{BASE}/admin/import/preview", RETIRED_PROBE_CSV)
+        assert "该Curve已停用" in r.text, r.text[:400]              # retired → rejected
+        # reactivate so the stray curve does not affect later steps
+        c.post(f"{BASE}/admin/curves/{tmp_curve.id}/toggle", follow_redirects=True)
+        db.expire_all()
+        assert db.get(Curve, tmp_curve.id).is_active is True
+        print("[13] v5.0 curve integer enforcement (#6) + retire/reject (#7) OK")
+
+        # ---- v5.0 #12 plan export + #13 KPI export ------------------------------------
+        plans_csv = c.get(f"{BASE}/admin/export_plans.csv").text
+        assert "计划名" in plans_csv and "人-季次" in plans_csv and "平均支付率" in plans_csv
+        assert "Sales Incentive" in plans_csv                       # the seeded plan appears
+        kpis_csv = c.get(f"{BASE}/admin/export_kpis.csv").text
+        assert "KPI 名" in kpis_csv and "包含计划数" in kpis_csv and "平均完成率" in kpis_csv
+        assert "Revenue" in kpis_csv
+        print("[13b] v5.0 plan export (#12) + KPI export (#13) OK")
+
+        # ---- v5.0 #5 user roster export + batch enable/disable by re-upload -----------
+        roster = c.get(f"{BASE}/admin/users/export.csv").text
+        assert "工号" in roster and "是否启用" in roster            # localized header (#2/#5)
+        assert "E001" in roster and "E004" in roster
+        admin = db.query(User).filter_by(employee_id="ADMIN1").first()
+        status_csv = ("employee_id,name,email,role,bg,is_active\n"
+                      "E004,陈静,chen.jing@example.com,EMPLOYEE,Commercial,N\n"      # disable
+                      "E001,张伟,zhang.wei@example.com,EMPLOYEE,Retail,Y\n"          # unchanged
+                      f"{admin.employee_id},{admin.name},{admin.email},ADMIN,,N\n")   # self → skip
+        r = upload(c, f"{BASE}/admin/users/status/preview", status_csv)
+        assert "E004" in r.text, r.text[:400]
+        r = c.post(f"{BASE}/admin/users/status/execute", data={"csv_text": status_csv})
+        assert "停用 1 人" in r.text, r.text[:400]                 # only E004 actually changed
+        db.expire_all()
+        assert db.query(User).filter_by(employee_id="E004").first().is_active is False
+        assert db.query(User).filter_by(employee_id="ADMIN1").first().is_active is True  # self kept
+        r = c.post(f"{BASE}/admin/users/status/execute",
+                   data={"csv_text": "employee_id,is_active\nE004,Y\n"})
+        assert "启用 1 人" in r.text, r.text[:400]
+        db.expire_all()
+        assert db.query(User).filter_by(employee_id="E004").first().is_active is True
+        print("[13c] v5.0 user roster export + batch enable/disable by upload (#5) OK")
 
         # ---- BG admin #4: multi-BG scope (BGA1 manages Retail + Commercial) ----
         login(c, "BGA1", "BGA1")
@@ -370,13 +371,13 @@ def main():
         assert "可导入" in r.text and "超出本 BG 权限" in r.text, r.text[:600]
         bg_page = c.get(f"{BASE}/bg").text
         assert "奖金总览" in bg_page and "E001" in bg_page and "E004" in bg_page
-        assert "季度总支付率" in bg_page
+        assert "YTD加权支付率" in bg_page                        # v5.0 #8 column header
         assert "商业 / 零售" in bg_page                    # bg_title shows both managed BGs
         assert "E900" not in bg_page                        # HR employee not in BGA1's /bg
         r = c.get(f"{BASE}/bg/export.csv")
         assert "E001" in r.text and "E004" in r.text and "E900" not in r.text
         rk = c.get(f"{BASE}/bg/export_kpi.csv")
-        assert "kpi_name" in rk.text and "E001" in rk.text and "E004" in rk.text \
+        assert "KPI 名" in rk.text and "E001" in rk.text and "E004" in rk.text \
                and "E900" not in rk.text
         print("[14] BG admin multi-BG scope (template/view/export include both, HR out) OK")
 
@@ -416,7 +417,7 @@ def main():
         assert "已发出 1 封" in r.text, r.text[:400]
         db.expire_all()
         letter = db.query(Letter).filter_by(recipient_id=e002.id).order_by(Letter.id.desc()).first()
-        assert letter and letter.send_mode == "outbox"
+        assert letter and letter.send_mode in ("outbox", "smtp")   # outbox under SMTP_DISABLED
         assert "区间斜率" in letter.body_html and "达成率区间" in letter.body_html
         preview = c.get(f"{BASE}/letter/{letter.token}")
         assert "管理员身份预览" in preview.text
@@ -430,6 +431,18 @@ def main():
         db.expire_all()
         assert db.query(Letter).filter_by(id=letter.id).first().read_at is not None
         print("[16] letter with curve slope table + single ack + recipient-only read OK")
+
+        # ---- v5.0 #16 letter log export (all / one period) + #17 mail-test action ------
+        le_all = c.get(f"{BASE}/letters/export.csv").text
+        assert "令牌" in le_all and "收件人" in le_all          # localized headers (#2)
+        assert e002.employee_id in le_all                          # the letter we just sent
+        le_q = c.get(f"{BASE}/letters/export.csv?period=2026-Q2").text
+        assert "2026-Q2" in le_q and "2026-Q1" not in le_q         # period filter applied
+        # transport self-test action — under SMTP_DISABLED it reports the local outbox
+        # mode deterministically and never touches the network.
+        r = c.post(f"{BASE}/letters/mailtest", follow_redirects=True)
+        assert "OUTBOX" in r.text, r.text[:400]
+        print("[16a] v5.0 letter log export (#16) + mail-test action (#17) OK")
 
         # ---- #10 letters overhaul: Plan_Table vs Performance_Table split,
         #      expanded placeholders, Global ADMIN templates ----
@@ -528,7 +541,8 @@ def main():
         login(c, "E001", "E001")
         me = c.get(f"{BASE}/me")
         assert "张伟" in me.text
-        assert "加权支付率" in me.text and "季度总支付率" in me.text
+        assert "YTD加权支付率" in me.text       # v5.0 #8 weighted summary label (always rendered)
+        assert "季度总支付率" not in me.text    # old per-quarter total-rate term is gone
         assert "未加权" not in me.text          # system no longer surfaces unweighted rate
         assert "Q4" in me.text               # four quarters shown horizontally
         assert "华东销售部" in me.text        # department shown (translated)
@@ -544,7 +558,7 @@ def main():
         assert c.get(f"{BASE}/admin/users/import/template.csv", follow_redirects=False).status_code == 303
         login(c, "ADMIN1", "admin123")
         users_tpl = c.get(f"{BASE}/admin/users/import/template.csv").text
-        assert "employee_id" in users_tpl and "password" in users_tpl
+        assert "工号" in users_tpl and "密码" in users_tpl        # v5.0 #2 localized header
         users_csv = (
             "employee_id,name,email,role,bg,department,job_title,manager_id,password\n"
             "E005,孙悦,sun.yue@example.com,EMPLOYEE,Retail,Sales East,销售代表,M003,\n"

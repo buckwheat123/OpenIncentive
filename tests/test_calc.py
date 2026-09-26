@@ -142,9 +142,78 @@ def test_weighted_rate_keeps_partial_weight_sum():
     assert calc["final_rate_pct"] == 65.0
 
 
+def test_curve_integers():
+    """v5.0 #6: interpolation points and the payout cap must be whole integers. A
+    decimal or otherwise malformed value is rejected with the explicit hint so an
+    admin can never publish a fractional breakpoint by accident."""
+    from app.curves import IntegerRequired, parse_cap, parse_points
+
+    assert parse_points("0:0, 100:100") == [[0, 0], [100, 100]]
+    assert parse_cap("200") == 200
+    assert parse_cap("") is None
+    for bad in ("0:0, 80.5:50", "0:0, 100:12.3", "0:0, 1e2:100"):
+        try:
+            parse_points(bad)
+            raise AssertionError(f"fractional/malformed point must be rejected: {bad}")
+        except IntegerRequired as e:
+            assert "请以整数格式输入" in str(e)
+    for bad in ("150.5", "1.2e2"):
+        try:
+            parse_cap(bad)
+            raise AssertionError(f"fractional cap must be rejected: {bad}")
+        except IntegerRequired as e:
+            assert "请以整数格式输入" in str(e)
+
+
+def test_missing_actual_is_blank():
+    """v5.0 #1: a KPI with no actual yet (a fresh quarter before performance data
+    lands) is reported BLANK — actual/attainment/rate are None and it contributes
+    nothing to the weighted rate. It is NOT silently treated as 0% attainment."""
+    import json
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base
+    from app.calc import compute_plan
+    from app.models import Actual, BonusPlan, Curve, PlanKpi, User
+    from app.security import hash_password
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+
+    emp = User(employee_id="E1", name="Emp", email="e@x.com", bg="Retail",
+               password_hash=hash_password("x"))
+    db.add(emp)
+    db.flush()
+    curve = Curve(name="Std", points_json=json.dumps([[0, 0], [100, 100], [200, 200]]), cap_pct=None)
+    db.add(curve)
+    db.flush()
+    plan = BonusPlan(period="2027-Q1", employee_id=emp.id, plan_name="Sales Incentive")
+    db.add(plan)
+    db.flush()
+    db.add(PlanKpi(plan_id=plan.id, kpi_name="Sales", weight_pct=60, quota=100, curve_id=curve.id))
+    db.add(PlanKpi(plan_id=plan.id, kpi_name="NPS", weight_pct=40, quota=50, curve_id=curve.id))
+    # Only Sales has an actual; NPS has none yet.
+    db.add(Actual(period="2027-Q1", employee_id=emp.id, kpi_name="Sales", actual=100, is_current=True))
+    db.commit()
+
+    calc = compute_plan(db, plan, "2027-Q1")
+    by_kpi = {d["kpi"]: d for d in calc["detail"]}
+    assert by_kpi["NPS"]["actual"] is None
+    assert by_kpi["NPS"]["attainment_pct"] is None
+    assert by_kpi["NPS"]["rate_pct"] is None
+    # Weighted counts only the measured KPI: 60/100*100 = 60 (NPS excluded, NOT 0).
+    assert calc["weighted_rate_pct"] == 60.0, calc["weighted_rate_pct"]
+    assert calc["weight_total_pct"] == 100.0   # weights still total 100
+
+
 if __name__ == "__main__":
     test_curves()
     test_password()
     test_calculation_e2e()
     test_weighted_rate_keeps_partial_weight_sum()
+    test_curve_integers()
+    test_missing_actual_is_blank()
     print("ALL TESTS PASSED")

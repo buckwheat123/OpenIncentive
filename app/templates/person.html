@@ -21,12 +21,12 @@
   {% for pt in plan_tables %}
   <div class="card">
     <h3 style="margin-top:0">{{ year }} {{ tl(pt.plan_name) }}</h3>
-    <table>
+    <table class="matrix">
       <tr><th>{{ t('metric') }}</th>{% for q in pt.quarters %}<th class="right">{{ q }}</th>{% endfor %}</tr>
       {% for row in pt.rows %}
       <tr{% if row.kind == 'summary' %} class="summary-row"{% endif %}>
         <td>{% if row.kind == 'summary' %}<strong>{{ row.label }}</strong>{% else %}{{ row.label }}{% endif %}</td>
-        {% for cell in row.cells %}<td class="right">{{ cell or '-' }}</td>{% endfor %}
+        {% for cell in row.cells %}<td class="right">{{ cell }}</td>{% endfor %}
       </tr>
       {% endfor %}
     </table>
@@ -36,12 +36,12 @@
   <div class="card"><p class="muted">{{ t('no_plans_year') }}</p></div>
 {% endif %}
 
-{% if versions is defined %}
+{% if show_versions %}
 <div class="card">
   <h3 style="margin-top:0">{{ t('info_history') }}</h3>
   <p class="muted">{{ t('info_history_note') }}</p>
   {% if versions %}
-  <table>
+  <table class="sortable">
     <tr><th>{{ t('version') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th>
         <th>{{ t('role') }}</th><th>{{ t('bg') }}</th><th>{{ t('department') }}</th>
         <th>{{ t('job_title') }}</th><th>{{ t('manager') }}</th>

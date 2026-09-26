@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 
 from .calc import is_locked
 from .deps import apply_managed_bgs, archive_user_info, bg_allowed, current_info_tuple
-from .i18n import DEFAULT_LANG, Translator, invalidate_label_cache
+from .i18n import (DEFAULT_LANG, Translator, invalidate_label_cache, normalize_header,
+                   translate_headers)
 from .models import Actual, BonusPlan, Curve, DataOpLog, Label, PlanKpi, User, UserManagedBg
 from .security import hash_password
 
@@ -65,7 +66,7 @@ def decode_csv(raw: bytes) -> str:
 def _rows(text: str) -> list[dict]:
     text = text.lstrip("\ufeff")
     return [
-        {k.strip(): (v or "").strip() for k, v in row.items() if k is not None}
+        {normalize_header(k): (v or "").strip() for k, v in row.items() if k is not None}
         for row in csv.DictReader(io.StringIO(text))
     ]
 
@@ -114,10 +115,10 @@ def recent_periods(db: Session, n: int = 3) -> list[str]:
 
 
 def big_template_rows(db: Session, period: str | None = None, bg: str | None = None,
-                      with_actual: bool = True) -> list[list]:
+                      with_actual: bool = True, lang: str = DEFAULT_LANG) -> list[list]:
     """Import template. No period → header only (blank template). With period →
     prefilled from that quarter's current data, scoped to bg (permission filter)."""
-    header = big_header(with_actual)
+    header = translate_headers(big_header(with_actual), lang)
     rows = [header]
     if not period:
         return rows
@@ -218,16 +219,18 @@ def _sig_from_entries(rows: list[dict]) -> tuple:
     return tuple(sorted((e["kpi_name"], round(e["weight"], 6), e["curve_id"]) for e in rows))
 
 
-def _load_plan_registry(db: Session, period: str) -> tuple[dict, dict]:
-    """Per-period, cross-BG registries: signature -> canonical name and name -> signature,
-    seeded from the quarter's currently-active plans (F5: a plan_name maps to exactly one
-    KPI/Curve/weight combination within a period)."""
+def _load_plan_registry(db: Session, period: str = "") -> tuple[dict, dict]:
+    """GLOBAL, cross-BG / cross-quarter registries (v5.0 #11): signature -> canonical
+    name and name -> signature, seeded from EVERY currently-active plan. The same
+    (KPI name, weight, curve) combination therefore resolves to the earliest-used plan
+    name regardless of which quarter or BG first introduced it. The ``period`` argument
+    is retained only for call-site compatibility and is ignored."""
     sig_to_name: dict[tuple, str] = {}
     name_to_sig: dict[str, tuple] = {}
     plans = db.scalars(
-        select(BonusPlan).where(BonusPlan.period == period,
-                                BonusPlan.is_current == True,   # noqa: E712
-                                BonusPlan.is_deleted == False)  # noqa: E712
+        select(BonusPlan).where(
+            BonusPlan.is_current == True,   # noqa: E712
+            BonusPlan.is_deleted == False)  # noqa: E712
     ).all()
     for p in plans:
         sig = _sig_from_kpis(p)
@@ -258,15 +261,10 @@ def resolve_plan_names(db: Session, entries: list[dict], t: Translator) -> None:
     for e in entries:
         if e["ok"]:
             groups.setdefault((e["period"], e["employee"].id, e["plan_name"]), []).append(e)
-    registries: dict[str, tuple[dict, dict]] = {}
+    # ONE global registry shared by every group (v5.0 #11: uniqueness is cross-BG/period)
+    sig_to_name, name_to_sig = _load_plan_registry(db)
 
-    def reg(period: str):
-        if period not in registries:
-            registries[period] = _load_plan_registry(db, period)
-        return registries[period]
-
-    for (period, _emp_id, raw_name), rows in groups.items():
-        sig_to_name, name_to_sig = reg(period)
+    for (_period, _emp_id, raw_name), rows in groups.items():
         sig = _sig_from_entries(rows)
         if sig in sig_to_name:
             canonical = sig_to_name[sig]
@@ -348,6 +346,8 @@ def parse_big_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
         curve = db.scalars(select(Curve).where(Curve.name == curve_name)).first()
         if curve is None:
             entry["status"] = t.t("row_no_curve", name=curve_name); continue
+        if not curve.is_active:
+            entry["status"] = t.t("row_curve_inactive"); continue
         entry["curve_id"] = curve.id
         entry["status"] = t.t("row_importable")
         entry["ok"] = True
@@ -408,23 +408,15 @@ def big_summary(entries: list[dict]) -> dict:
 
 
 def execute_big_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
-                       with_actual: bool = True, proxy_note: str = "",
-                       conflict_check: bool = False, weight_check: bool = False) -> str:
+                       with_actual: bool = True, proxy_note: str = "") -> str:
     """Pass-2: re-parse and import the valid rows. Identical rows are ignored,
     invalid rows are skipped (they were reported in the preview).
 
-    conflict_check=True additionally blocks any row whose quota disagrees with an
-    already-current quarterly plan (Batch E2b) — used by the letter-data import so it
-    can never silently overwrite the calculation data.
-
-    weight_check=True enforces F1: any employee who has a plan whose weights don't sum
-    to 100% has ALL of their rows rejected (letter-data import only)."""
+    v5.0: the notification letter no longer imports its own data — it reads directly
+    from whatever is already in the library — so this single importer is the only data
+    entry point. Non-100% weights are recorded and flagged on export, never auto-fixed."""
     t = Translator(lang)
     entries = parse_big_rows(db, text, actor, lang, with_actual)
-    if weight_check:
-        mark_letter_weight_errors(db, entries, t)
-    if conflict_check:
-        mark_letter_conflicts(db, entries, t)
     summary = big_summary(entries)
     groups: dict[tuple, list[dict]] = {}
     order: list[tuple] = []
@@ -509,289 +501,6 @@ def big_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG
     return rows
 
 
-# ---------------------------------------------------------------- year-based letter-data import
-#
-# Feature #10: the letter-data sheet uses a YEAR-shaped template — one row per
-# (year, employee, plan, KPI) carrying FOUR YTD quota columns (ytd_q1..ytd_q4).
-# Internally we expand each row into up to four big-table rows (period =
-# f"{year}-Q{n}", quota = ytd_qn) so the existing big-table parser, latest-wins
-# logic and versioned BonusPlan upsert all apply unchanged. Empty ytd_qN cells
-# are skipped (no plan is created for that quarter).
-
-YEAR_HEADER = ["year", "employee_id", "name", "email", "bg", "department", "job_title",
-               "manager_id", "role", "plan_name", "kpi_name", "weight_pct", "curve_name",
-               "ytd_q1", "ytd_q2", "ytd_q3", "ytd_q4"]
-QUARTER_SUFFIXES = ["Q1", "Q2", "Q3", "Q4"]
-
-
-def recent_years(db: Session, n: int = 3) -> list[str]:
-    """Distinct years that have any BonusPlan/Actual data, most recent first."""
-    periods = set(db.scalars(select(BonusPlan.period).distinct()).all())
-    periods |= set(db.scalars(select(Actual.period).distinct()).all())
-    years = sorted({p.split("-")[0] for p in periods if "-" in p}, reverse=True)
-    return years[:n]
-
-
-def year_to_big_text(text: str) -> str:
-    """Expand a year-shaped letter-data CSV into the (period-keyed) big-table
-    format that parse_big_rows / execute_big_import already understand. Non-year
-    headers pass through unchanged so callers can feed either flavor."""
-    rows = _rows(text)
-    if not rows:
-        return text
-    first = next(iter(rows[0].keys()), "")
-    # Already big-shaped? Leave untouched.
-    if "period" in rows[0] and "year" not in rows[0]:
-        return text
-    out = io.StringIO()
-    writer = csv.writer(out, lineterminator="\n")
-    writer.writerow(big_header(False))   # same columns as LETTER_DATA_HEADER
-    for row in rows:
-        year = (row.get("year") or "").strip()
-        if not year:
-            continue
-        base = [
-            year,                                                    # period slot
-            (row.get("employee_id") or "").strip(),
-            (row.get("name") or "").strip(),
-            (row.get("email") or "").strip(),
-            (row.get("bg") or "").strip(),
-            (row.get("department") or "").strip(),
-            (row.get("job_title") or "").strip(),
-            (row.get("manager_id") or "").strip(),
-            (row.get("role") or "").strip(),
-            (row.get("plan_name") or "").strip(),
-            (row.get("kpi_name") or "").strip(),
-            (row.get("weight_pct") or "").strip(),
-            "",                                                       # quota filled per quarter below
-            (row.get("curve_name") or "").strip(),
-        ]
-        for qi, q in enumerate(QUARTER_SUFFIXES):
-            quota = (row.get(f"ytd_q{qi+1}") or "").strip()
-            if quota == "":
-                continue
-            r = list(base)
-            r[0] = f"{year}-{q}"
-            r[12] = quota
-            writer.writerow(r)
-    return out.getvalue()
-
-
-def year_letter_template_rows(db: Session, year: str | None = None,
-                              bg=None) -> list[list]:
-    """Prefill a year-form sheet from existing per-quarter BonusPlans: group by
-    (year, employee, plan_name, kpi_name) and lay the four YTD quotas side by side.
-    Weight / curve come from the latest current plan version."""
-    rows = [YEAR_HEADER[:]]
-    if not year:
-        return rows
-    stmt = select(BonusPlan).where(BonusPlan.period.like(f"{year}-%"),
-                                   BonusPlan.is_current == True,  # noqa: E712
-                                   BonusPlan.is_deleted == False)  # noqa: E712
-    plans = db.scalars(stmt).all()
-    grouped: dict[tuple, dict] = {}
-    order: list[tuple] = []
-    for p in plans:
-        emp = db.get(User, p.employee_id)
-        if not emp or not _bg_in(emp.bg, bg):
-            continue
-        try:
-            qi = QUARTER_SUFFIXES.index(p.period.split("-")[1])
-        except (ValueError, IndexError):
-            continue
-        for kpi in p.kpis:
-            key = (year, emp.employee_id, p.plan_name, kpi.kpi_name)
-            if key not in grouped:
-                grouped[key] = {
-                    "emp": emp, "plan_name": p.plan_name, "kpi_name": kpi.kpi_name,
-                    "weight": kpi.weight_pct, "curve": kpi.curve.name if kpi.curve else "",
-                    "ytd": ["", "", "", ""],
-                }
-                order.append(key)
-            g = grouped[key]
-            g["ytd"][qi] = fmt_num(kpi.quota)
-            g["weight"] = kpi.weight_pct
-            g["curve"] = kpi.curve.name if kpi.curve else ""
-    for key in order:
-        g = grouped[key]
-        emp = g["emp"]
-        mgr = db.get(User, emp.manager_id) if emp.manager_id else None
-        rows.append([
-            year, emp.employee_id, emp.name, emp.email or "", emp.bg or "",
-            emp.department or "", emp.job_title or "",
-            mgr.employee_id if mgr else "", emp.role or "",
-            g["plan_name"], g["kpi_name"], fmt_num(g["weight"]), g["curve"],
-            *g["ytd"],
-        ])
-    return rows
-
-
-def parse_year_letter_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG) -> list[dict]:
-    """Parse a year-form sheet by first expanding it into the big-table format, then
-    delegating to parse_big_rows. This keeps the error vocabulary (BG scope, curve,
-    required, latest-wins) identical between the two letter/calculation sheets.
-
-    Feature #10 / Batch E2b: after the standard parse, rows that CONFLICT with the
-    quarterly calculation data (same period+employee+plan+KPI already present with a
-    different quota) are blocked here at preview time so they are never silently
-    overwritten by a letter import. The calculation sheet remains the authority; the
-    user downloads the conflict list to reconcile."""
-    entries = parse_big_rows(db, year_to_big_text(text), actor, lang, with_actual=False)
-    tr = Translator(lang)
-    mark_letter_weight_errors(db, entries, tr)
-    mark_letter_conflicts(db, entries, tr)
-    return entries
-
-
-def mark_letter_weight_errors(db: Session, entries: list[dict], t: Translator) -> None:
-    """F1 (letter import only): every plan's weights must total 100%. If any single plan
-    of an employee fails, the WHOLE employee's rows are rejected and not imported — a
-    plan that doesn't add up signals the sheet is wrong for that person, so none of it
-    should land. The calculation big-table sheet deliberately allows non-100 weights and
-    never calls this."""
-    totals: dict[tuple, float] = {}
-    for e in entries:
-        if e["ok"]:
-            key = (e["employee"].id, e["period"], e["plan_name"])
-            totals[key] = totals.get(key, 0.0) + (e["weight"] or 0.0)
-    bad_emps: dict[int, str] = {}
-    for (emp_id, _period, plan), total in totals.items():
-        if abs(total - 100.0) > 1e-6 and emp_id not in bad_emps:
-            bad_emps[emp_id] = f"{plan}（{fmt_num(total)}%）"
-    if not bad_emps:
-        return
-    for e in entries:
-        if e["ok"] and e["employee"].id in bad_emps:
-            e["ok"] = False
-            e["status"] = t.t("row_weight_not_100")
-            e["note"] = t.t("row_weight_not_100_note", plan=bad_emps[e["employee"].id])
-
-
-def mark_letter_conflicts(db: Session, entries: list[dict], t: Translator) -> None:
-    """Flag (and block) letter rows whose quota disagrees with an already-current
-    quarterly plan for the same period+employee+plan+KPI. Rows that match or are new
-    are left untouched so they still import normally."""
-    for e in entries:
-        e.setdefault("conflict", False)
-        if not e["ok"]:
-            continue
-        plan = db.scalars(
-            select(BonusPlan).where(BonusPlan.period == e["period"],
-                                    BonusPlan.employee_id == e["employee"].id,
-                                    BonusPlan.plan_name == e["plan_name"],
-                                    BonusPlan.is_current == True,   # noqa: E712
-                                    BonusPlan.is_deleted == False)  # noqa: E712
-        ).first()
-        if plan is None:
-            continue  # brand-new plan for this quarter → importable
-        kpi = next((k for k in plan.kpis if k.kpi_name == e["kpi_name"]), None)
-        if kpi is None:
-            continue  # the sheet defines the full KPI set; a new KPI is not a conflict
-        if abs(kpi.quota - e["quota"]) > 1e-6:
-            e["conflict"] = True
-            e["existing_quota"] = kpi.quota
-            e["incoming_quota"] = e["quota"]
-            e["ok"] = False
-            e["status"] = t.t("row_letter_conflict")
-            e["note"] = t.t("row_letter_conflict_note",
-                            old=fmt_num(kpi.quota), new=fmt_num(e["quota"]))
-
-
-def letter_summary(entries: list[dict]) -> dict:
-    s = big_summary(entries)
-    s["conflicts"] = sum(1 for e in entries if e.get("conflict"))
-    return s
-
-
-def year_letter_conflict_rows(db: Session, text: str, actor: User,
-                              lang: str = DEFAULT_LANG) -> list[list]:
-    """Conflict list CSV, one row per ORIGINAL year row that carries at least one
-    conflicting quarter. The four ytd_qN columns show the incoming (letter) values
-    and an existing_* set shows what the quarterly calculation already holds, so the
-    sheet can be fixed and reconciled against the calc data."""
-    t = Translator(lang)
-    expanded = year_to_big_text(text)
-    entries = parse_big_rows(db, expanded, actor, lang, with_actual=False)
-    mark_letter_conflicts(db, entries, t)
-    # index conflicts by (year, employee, plan, kpi) -> {quarter_label: (old, new)}
-    conf: dict[tuple, dict] = {}
-    for e in entries:
-        if not e.get("conflict"):
-            continue
-        raw = e["raw"]
-        year = (raw.get("period") or "").split("-")[0]
-        q = (raw.get("period") or "").split("-")[1] if "-" in (raw.get("period") or "") else ""
-        key = (year, raw.get("employee_id") or "", raw.get("plan_name") or "", raw.get("kpi_name") or "")
-        conf.setdefault(key, {})[q] = (e["existing_quota"], e["incoming_quota"])
-    header = YEAR_HEADER + ["existing_q1", "existing_q2", "existing_q3", "existing_q4", "conflict_note"]
-    rows = [header]
-    for orow in _rows(text):
-        year = (orow.get("year") or "").strip()
-        if not year:
-            continue
-        key = (year, (orow.get("employee_id") or "").strip(),
-               (orow.get("plan_name") or "").strip(), (orow.get("kpi_name") or "").strip())
-        quarters = conf.get(key)
-        if not quarters:
-            continue
-        existing = [fmt_num(quarters[q][0]) if q in quarters else "" for q in ("Q1", "Q2", "Q3", "Q4")]
-        detail = "; ".join(
-            t.t("conflict_quarter_detail", q=q, old=fmt_num(o), new=fmt_num(n))
-            for q, (o, n) in sorted(quarters.items()))
-        out = [orow.get(h, "") or "" for h in YEAR_HEADER]
-        rows.append(out + existing + [detail])
-    return rows
-
-
-
-def execute_year_letter_import(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG,
-                               proxy_note: str = "") -> str:
-    return execute_big_import(db, year_to_big_text(text), actor, lang, with_actual=False,
-                              proxy_note=proxy_note, conflict_check=True, weight_check=True)
-
-
-def year_letter_error_rows(db: Session, text: str, actor: User, lang: str = DEFAULT_LANG) -> list[list]:
-    """Error-list CSV keyed by the ORIGINAL year-form row so the user can fix and
-    re-upload the same sheet they sent us. Big-table errors (from the expanded
-    view) are mapped back to (year, employee, plan, kpi)."""
-    expanded = year_to_big_text(text)
-    entries = parse_big_rows(db, expanded, actor, lang, with_actual=False)
-    mark_letter_weight_errors(db, entries, Translator(lang))
-    header = YEAR_HEADER + ["status", "note"]
-    rows = [header]
-    original_year_rows = _rows(text)
-    # Group big-table entries by (year, employee, plan, kpi) so a single year row
-    # can carry a merged error/warning string.
-    grouped: dict[tuple, list[dict]] = {}
-    for e in entries:
-        if e["ok"] or e["ignored"]:
-            continue
-        raw = e["raw"]
-        year = (raw.get("period") or "").split("-")[0]
-        key = (year, raw.get("employee_id") or "", raw.get("plan_name") or "", raw.get("kpi_name") or "")
-        grouped.setdefault(key, []).append(e)
-    for orow in original_year_rows:
-        year = (orow.get("year") or "").strip()
-        if not year:
-            continue
-        key = (year, (orow.get("employee_id") or "").strip(),
-               (orow.get("plan_name") or "").strip(), (orow.get("kpi_name") or "").strip())
-        errs = grouped.get(key)
-        if not errs:
-            continue
-        seen = set()
-        merged_status, merged_note = [], []
-        for e in errs:
-            if e["status"] not in seen:
-                merged_status.append(e["status"])
-                seen.add(e["status"])
-            if e["note"] and e["note"] not in merged_note:
-                merged_note.append(e["note"])
-        out = [orow.get(h, "") or "" for h in YEAR_HEADER]
-        rows.append(out + [" / ".join(merged_status), "; ".join(merged_note)])
-    return rows
-
-
 # ---------------------------------------------------------------- batch user import (ADMIN only)
 #
 # A dedicated roster sheet for user management. Idempotent upsert semantics:
@@ -806,9 +515,9 @@ USER_HEADER = ["employee_id", "name", "email", "role", "bg", "department",
 VALID_ROLES = {"ADMIN", "BG_ADMIN", "MANAGER", "EMPLOYEE"}
 
 
-def user_template_rows() -> list[list]:
+def user_template_rows(lang: str = DEFAULT_LANG) -> list[list]:
     """Blank batch-user template (header only)."""
-    return [USER_HEADER]
+    return [translate_headers(USER_HEADER, lang)]
 
 
 def _user_field_changes(db: Session, existing: User, raw: dict) -> dict:
@@ -1264,12 +973,20 @@ def export_results_rows(db: Session, bg: str | None = None, period: str | None =
 
     t = Translator(lang)
     not_100_comment = t.t("weight_not_100_comment")
-    header = ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
-              "weighted_rate_pct", "weight_total_pct", "adjustment_pct", "final_rate_pct",
-              "adjusted", "sealed", "comment", "calculated_at"]
+    header = translate_headers(
+        ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
+         "weighted_rate_pct", "weight_total_pct", "adjustment_pct", "final_rate_pct",
+         "adjusted", "sealed", "comment", "calculated_at"], lang)
     rows = [header]
     for p, r in _latest_results_by_period(db, bg, period, year):
         emp = r.employee
+        # v5.0 #4: show the org info frozen at calculation time (fallback = live fields).
+        snap = lambda attr, live: getattr(r, "snapshot_" + attr) or live  # noqa: E731
+        e_id = snap("employee_id", emp.employee_id)
+        e_name = snap("name", emp.name)
+        e_bg = snap("bg", emp.bg)
+        e_dept = snap("department", emp.department or "")
+        e_title = snap("job_title", emp.job_title or "")
         weight_total = r.weight_total_pct
         comment = "" if abs(weight_total - 100.0) < 1e-6 else not_100_comment
         sealed = "Y" if is_locked(db, p, emp.bg) else ""
@@ -1277,8 +994,7 @@ def export_results_rows(db: Session, bg: str | None = None, period: str | None =
             select(CalcRun).where(CalcRun.period == p, CalcRun.id == r.run_id)
         ).first()
         calculated_at = run.created_at.strftime("%Y-%m-%d %H:%M") if run else ""
-        rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
-                     emp.job_title or "", r.plan_name,
+        rows.append([p, e_id, e_name, e_bg, e_dept, e_title, r.plan_name,
                      f"{r.weighted_rate_pct:.2f}", fmt_num(weight_total),
                      f"{r.adjustment_pct:.2f}", f"{r.final_rate_pct:.2f}",
                      "Y" if r.adjusted else "", sealed, comment, calculated_at])
@@ -1295,12 +1011,19 @@ def export_kpi_rows(db: Session, bg: str | None = None, period: str | None = Non
     """
     from .models import CalcRun
 
-    header = ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
-              "kpi_name", "target", "actual", "curve_name", "weight_pct",
-              "attainment_pct", "rate_pct", "weighted_contribution_pct", "sealed", "calculated_at"]
+    header = translate_headers(
+        ["period", "employee_id", "name", "bg", "department", "job_title", "plan_name",
+         "kpi_name", "target", "actual", "curve_name", "weight_pct",
+         "attainment_pct", "rate_pct", "weighted_contribution_pct", "sealed", "calculated_at"], lang)
     rows = [header]
     for p, r in _latest_results_by_period(db, bg, period, year):
         emp = r.employee
+        snap = lambda attr, live: getattr(r, "snapshot_" + attr) or live  # noqa: E731
+        e_id = snap("employee_id", emp.employee_id)
+        e_name = snap("name", emp.name)
+        e_bg = snap("bg", emp.bg)
+        e_dept = snap("department", emp.department or "")
+        e_title = snap("job_title", emp.job_title or "")
         sealed = "Y" if is_locked(db, p, emp.bg) else ""
         run = db.scalars(
             select(CalcRun).where(CalcRun.period == p, CalcRun.id == r.run_id)
@@ -1312,17 +1035,168 @@ def export_kpi_rows(db: Session, bg: str | None = None, period: str | None = Non
             detail = []
         for d in detail:
             actual = d.get("actual")
-            rate = d.get("rate_pct") or 0.0
+            rate = d.get("rate_pct")                     # None → no actual yet (v5.0 blank)
             weight = d.get("weight_pct") or 0.0
-            contribution = round(weight / 100.0 * rate, 4)  # this KPI's weighted contribution
-            rows.append([p, emp.employee_id, emp.name, emp.bg, emp.department or "",
-                         emp.job_title or "", r.plan_name,
+            contribution = round(weight / 100.0 * rate, 4) if rate is not None else None
+            rows.append([p, e_id, e_name, e_bg, e_dept, e_title, r.plan_name,
                          d.get("kpi", ""), fmt_num(d.get("quota")),
                          "" if actual is None else fmt_num(actual),
                          d.get("curve", ""), fmt_num(weight),
                          fmt_num(d.get("attainment_pct")), fmt_num(rate), fmt_num(contribution),
                          sealed, calculated_at])
     return rows
+
+
+def export_plans_rows(db: Session, bg: str | None = None,
+                      lang: str = DEFAULT_LANG) -> list[list]:
+    """v5.0 #12: one row per plan_name ever used, with its KPI structure (KPI · Curve ·
+    weight), the total person-quarters it has been used across, and the average payout
+    rate per person-quarter. Plan structure is read from a representative current plan;
+    person-quarters and average rate come from the latest result of every (person, plan,
+    period) — the same 'latest run wins' basis the result export uses."""
+    header = translate_headers(
+        ["plan_name", "kpi_count", "kpi_structure", "person_quarters", "avg_payout_rate"], lang)
+    structures: dict[str, list[tuple]] = {}
+    order: list[str] = []
+    plans = db.scalars(
+        select(BonusPlan).where(BonusPlan.is_deleted == False)  # noqa: E712
+        .order_by(BonusPlan.id)
+    ).all()
+    for p in plans:
+        if p.plan_name in structures:
+            continue
+        if not _bg_in(p.employee.bg, bg):
+            continue
+        structures[p.plan_name] = [(k.kpi_name, k.curve.name, k.weight_pct) for k in p.kpis]
+        order.append(p.plan_name)
+    pq: dict[str, int] = {}
+    rate_sum: dict[str, float] = {}
+    for _prd, r in _latest_results_by_period(db, bg, None, None):
+        pq[r.plan_name] = pq.get(r.plan_name, 0) + 1
+        rate_sum[r.plan_name] = rate_sum.get(r.plan_name, 0.0) + r.final_rate_pct
+    rows = [header]
+    for name in order:
+        st = structures[name]
+        struct_txt = "  +  ".join(f"{k} · {c} · {fmt_num(w)}%" for k, c, w in st)
+        count = pq.get(name, 0)
+        avg = round(rate_sum[name] / count, 2) if count else ""
+        rows.append([name, len(st), struct_txt, count, avg])
+    return rows
+
+
+def export_kpis_rows(db: Session, bg: str | None = None,
+                     lang: str = DEFAULT_LANG) -> list[list]:
+    """v5.0 #13: one row per KPI name ever used, with how many current plans contain it
+    and its average attainment (达成率) across all person-quarters that have a calculated
+    value. KPIs with no actual yet contribute nothing to the average (blank, not 0)."""
+    header = translate_headers(["kpi_name", "plan_count", "avg_attainment"], lang)
+    kpi_plans: dict[str, set] = {}
+    plans = db.scalars(
+        select(BonusPlan).where(BonusPlan.is_current == True,      # noqa: E712
+                                BonusPlan.is_deleted == False)    # noqa: E712
+    ).all()
+    for p in plans:
+        if not _bg_in(p.employee.bg, bg):
+            continue
+        for k in p.kpis:
+            kpi_plans.setdefault(k.kpi_name, set()).add(p.plan_name)
+    attainment: dict[str, list[float]] = {}
+    for _prd, r in _latest_results_by_period(db, bg, None, None):
+        try:
+            detail = json.loads(r.detail_json) if r.detail_json else []
+        except (ValueError, TypeError):
+            detail = []
+        for d in detail:
+            a = d.get("attainment_pct")
+            if a is not None:
+                attainment.setdefault(d.get("kpi", ""), []).append(a)
+    rows = [header]
+    for k in sorted(set(kpi_plans) | set(attainment)):
+        vals = attainment.get(k)
+        avg = round(sum(vals) / len(vals), 2) if vals else ""
+        rows.append([k, len(kpi_plans.get(k, ())), avg])
+    return rows
+
+
+USER_STATUS_HEADER = ["employee_id", "name", "email", "role", "bg", "is_active"]
+
+
+def user_status_rows(db: Session, lang: str = DEFAULT_LANG) -> list[list]:
+    """v5.0 #5: export the full user roster with a prefilled is_active (Y/N) column so the
+    admin can flip the flag and re-upload it to batch enable/disable accounts."""
+    header = translate_headers(USER_STATUS_HEADER, lang)
+    rows = [header]
+    users = db.scalars(select(User).order_by(User.employee_id)).all()
+    for u in users:
+        rows.append([u.employee_id, u.name, u.email or "", u.role, u.bg or "",
+                     "Y" if u.is_active else "N"])
+    return rows
+
+
+def _is_active_mark(value: str) -> bool | None:
+    """Interpret a desired-active cell. Returns True/False, or None if not recognizable."""
+    v = (value or "").strip().lower()
+    if v in ("y", "yes", "1", "true", "active", "启用", "是"):
+        return True
+    if v in ("n", "no", "0", "false", "inactive", "disable", "停用", "否"):
+        return False
+    return None
+
+
+def parse_user_status_rows(db: Session, text: str, lang: str = DEFAULT_LANG) -> list[dict]:
+    """Validate a status-upload sheet: match each row to a user and compute the desired
+    active state. Rows already in the desired state are marked 'unchanged'."""
+    t = Translator(lang)
+    entries: list[dict] = []
+    for raw in _rows(text):
+        emp_id = (raw.get("employee_id") or "").strip()
+        if not emp_id and not (raw.get("name") or "").strip():
+            continue
+        employee = resolve_employee(db, emp_id, raw.get("name", ""))
+        want = _is_active_mark(raw.get("is_active", ""))
+        entry = {"raw": raw, "employee": employee, "want": want,
+                 "changed": False, "status": "", "ok": False, "note": ""}
+        entries.append(entry)
+        if employee is None:
+            entry["status"] = t.t("row_no_employee"); continue
+        if want is None:
+            entry["status"] = t.t("row_bad_number", f="is_active"); continue
+        if want == employee.is_active:
+            entry["status"] = t.t("row_identical"); entry["changed"] = False; entry["ok"] = True
+        else:
+            entry["status"] = (t.t("active") if want else t.t("inactive"))
+            entry["changed"] = True
+            entry["ok"] = True
+    return entries
+
+
+def execute_user_status_import(db: Session, text: str, actor: User,
+                               lang: str = DEFAULT_LANG) -> str:
+    """v5.0 #5: apply the enable/disable toggles requested by an uploaded status sheet.
+    Rows already in the desired state are skipped; the acting admin cannot disable them-
+    self; every change is audit-logged."""
+    t = Translator(lang)
+    entries = parse_user_status_rows(db, text, lang)
+    enabled = disabled = skipped = 0
+    for e in entries:
+        if not e["ok"] or not e["changed"]:
+            skipped += 1
+            continue
+        emp = e["employee"]
+        if emp.id == actor.id:
+            skipped += 1
+            continue
+        emp.is_active = e["want"]
+        emp.updated_at = utcnow()
+        db.add(DataOpLog(op_type="UPDATE", entity="user", entity_ref=emp.employee_id,
+                         reason="batch " + ("activate" if e["want"] else "deactivate"),
+                         created_by=actor.id))
+        if e["want"]:
+            enabled += 1
+        else:
+            disabled += 1
+    db.commit()
+    return t.t("msg_users_status_import", en=enabled, dis=disabled, sk=skipped)
 
 
 def to_csv(rows: list[list]) -> str:

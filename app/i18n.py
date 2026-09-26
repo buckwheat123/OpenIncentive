@@ -57,7 +57,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "manager": ("经理", "Manager"),
     "department": ("部门", "Department"),
     "job_title": ("职称", "Job Title"),
-    "reports_to": ("汇报给", "Reports to"),
+    "reports_to": ("直线经理：", "Direct manager: "),
     "info_updated_at": ("信息更新时间", "Info Updated At"),
     "actions": ("操作", "Actions"),
     "optional": ("可选", "optional"),
@@ -77,11 +77,11 @@ STRINGS: dict[str, tuple[str, str]] = {
     "sealed_col": ("是否已封存", "Sealed"),
     "attainment": ("达成率", "Attainment"),
     "payout_rate": ("支付率", "Payout Rate"),
-    "weighted_rate": ("加权支付率", "Weighted Rate"),
+    "weighted_rate": ("YTD加权支付率", "YTD Weighted Rate"),
     "weight_total": ("权重合计", "Weight Total"),
     "weight_not_100_comment": ("本次计算权重不是100%", "Weights did not total 100% for this calculation"),
     "special_adjust": ("特殊调整", "Special Adjustment"),
-    "quarter_total_rate": ("季度总支付率", "Quarterly Total Rate"),
+    "quarter_total_rate": ("YTD加权支付率（经特殊调整后）", "YTD Weighted Rate (after special adjustment)"),
     "actual_col": ("实绩", "Actual"),
     "weight_col": ("权重", "Weight"),
     "letter_ack_line": ("请打开以下链接查看并确认已阅：", "Open the link below to view and confirm reading: "),
@@ -186,7 +186,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "updated_at": ("更新时间", "Updated at"),
 
     # ---------- import ----------
-    "csv_import": ("季度大表导入（一张表）", "Quarterly Sheet Import (one table)"),
+    "csv_import": ("主表格导入", "Master Sheet Import"),
     "import_title": ("季度数据大表导入（版本化：重复导入生成新版本，旧版本锁定留档）",
                      "Quarterly Data Import (versioned: re-import creates a new version, old versions are locked)"),
     "import_big_note": ("每季度一张大表：员工信息 + 奖金计划（KPI/权重/目标/Curve）+ YTD 实绩一次传入。先上传预览校验，确认后执行导入。",
@@ -438,6 +438,64 @@ STRINGS: dict[str, tuple[str, str]] = {
     "changed_by": ("变更人", "Changed by"),
     "no_versions": ("暂无历史版本", "No archived versions yet"),
     "is_active_col": ("启用", "Active"),
+
+    # ---------- curve status (v5.0 #6/#7) ----------
+    "curve_status": ("状态", "Status"),
+    "curve_active": ("启用中", "Active"),
+    "curve_inactive": ("已停用", "Retired"),
+    "curve_disable": ("停用", "Retire"),
+    "curve_enable": ("启用", "Activate"),
+    "confirm_curve_disable": ("停用后新导入将拒绝该 Curve，已计算/已封存数据不受影响。确认停用？",
+                              "Retiring rejects this curve for new imports; already-calculated/sealed data is unaffected. Retire it?"),
+    "row_curve_inactive": ("该Curve已停用，请联系ADM", "This Curve is retired — contact an admin"),
+    "msg_curve_retired": ("Curve '{name}' 已停用（历史数据不受影响）", "Curve '{name}' retired (history unaffected)"),
+    "msg_curve_activated": ("Curve '{name}' 已重新启用", "Curve '{name}' re-activated"),
+    "int_hint": ("请以整数格式输入", "enter whole numbers only"),
+    "points_int_hint": ("插值点请全部使用整数，如 0:0,80:50,100:100",
+                        "All interpolation points must be integers, e.g. 0:0,80:50,100:100"),
+    "cap_int_hint": ("封顶支付率请填写整数（留空表示不封顶）",
+                     "Enter the cap as a whole number (blank = no cap)"),
+
+    # ---------- header translation & exports (v5.0 #2/#12/#13) ----------
+    "export_plans": ("计划导出", "Export Plans"),
+    "export_plans_note": ("导出全部出现过的计划（KPI 名 / Curve / 权重）及其历史总人-季次与按人季次的平均支付率。",
+                          "Export every plan ever used (KPI name / curve / weight) with its total person-quarters and the average payout rate per person-quarter."),
+    "export_kpis": ("KPI 导出", "Export KPIs"),
+    "export_kpis_note": ("导出全部出现过的 KPI 名字，及其被包含的计划数与按人季次的平均完成率。",
+                         "Export every KPI name ever used with how many plans contain it and its average attainment per person-quarter."),
+    "dl_plans_csv": ("下载计划清单 CSV", "Download plans CSV"),
+    "dl_kpis_csv": ("下载 KPI 清单 CSV", "Download KPIs CSV"),
+    "person_quarters": ("人-季次", "person-quarters"),
+    "avg_payout_rate": ("平均支付率", "Avg payout rate"),
+    "plan_count": ("包含计划数", "Plans containing"),
+    "avg_attainment": ("平均完成率", "Avg attainment"),
+    "header_translate_note": ("表头本身也走翻译表：导出时按界面语言翻译列名，导入时中英文表头都能识别。",
+                              "Column headers are translated too: exports localize header names, imports accept either the English key or its translation."),
+    "view_quarter_detail": ("季度详情", "Quarter detail"),
+
+    # ---------- letter-log export (v5.0 #16) ----------
+    "export_letters": ("导出通知信记录", "Export letter log"),
+    "export_letters_note": ("可导出权限范围内全部通知信记录，或仅指定季度。",
+                            "Export all letters in your scope, or only a chosen period."),
+    "all_periods_opt": ("全部期间", "All periods"),
+    "dl_letters_csv": ("下载通知信记录 CSV", "Download letter log CSV"),
+    "msg_users_status_import": ("批量启停完成：启用 {en} 人、停用 {dis} 人，跳过 {sk} 行",
+                                "Batch status done: {en} enabled, {dis} disabled, {sk} skipped"),
+
+    # ---------- user batch enable/disable (v5.0 #5) ----------
+    "users_status_title": ("批量启停账号", "Batch enable / disable"),
+    "users_status_note": ("先「导出用户清单」，在表里把 is_active 改成 Y/N，再上传回来即可批量启停；当前登录的管理员无法停用自身。",
+                          "Export the roster, flip the is_active column to Y/N, then upload it back to enable or disable accounts in bulk. You cannot disable your own account."),
+    "users_status_preview_note": ("仅标记为「变更」的行会在执行后生效；与现状一致的行会被跳过。",
+                                  "Only rows marked as changed take effect; rows already in the desired state are skipped."),
+    "user_status_counts": ("变更 {ch} 人 · 无需变更 {ig} 行 · 错误 {er} 行",
+                           "{ch} to change · {ig} unchanged · {er} errors"),
+    "dl_users_csv": ("导出用户清单 CSV", "Export user roster CSV"),
+
+    # ---------- mail connection self-test (v5.0 #17) ----------
+    "mail_test": ("测试邮件连接", "Test mail connection"),
+    "mail_test_note": ("仅登录验证 SMTP/POP3 配置，不会真正发信。未配置 SMTP 时系统写入本地发件箱 data/outbox。",
+                       "Logs in to verify SMTP/POP3 settings without sending. When SMTP is unset the platform writes to the local data/outbox folder."),
 }
 
 
@@ -470,8 +528,9 @@ _label_cache: dict[str, tuple[str, str]] | None = None
 
 
 def invalidate_label_cache() -> None:
-    global _label_cache
+    global _label_cache, _alias_map
     _label_cache = None
+    _alias_map = None
 
 
 def _labels() -> dict[str, tuple[str, str]]:
@@ -501,3 +560,131 @@ def translate_label(value, lang: str) -> str:
     zh, en = _labels().get(s, ("", ""))
     out = zh if lang == "zh" else en
     return out or s
+
+
+# ---------------- CSV column-header translation (v5.0 requirement #2) ----------------
+#
+# The translation (Label) table can drive not only the *values* under a column but the
+# column HEADER itself: register original='plan_name' with zh='计划名'/en='Plan Name' and
+# exports will show that header and imports will accept it. Built-in defaults below give
+# a sensible label out of the box; a Label row always wins.
+
+HEADER_DEFAULTS: dict[str, tuple[str, str]] = {
+    "period": ("期间", "Period"),
+    "employee_id": ("工号", "Employee ID"),
+    "name": ("姓名", "Name"),
+    "email": ("邮箱", "Email"),
+    "bg": ("BG", "BG"),
+    "department": ("部门", "Department"),
+    "job_title": ("职称", "Job Title"),
+    "manager_id": ("直线经理工号", "Manager ID"),
+    "role": ("角色", "Role"),
+    "plan_name": ("计划名", "Plan Name"),
+    "kpi_name": ("KPI 名", "KPI Name"),
+    "weight_pct": ("权重%", "Weight %"),
+    "quota": ("目标", "Quota"),
+    "curve_name": ("Curve 名", "Curve Name"),
+    "actual": ("实绩", "Actual"),
+    "year": ("年度", "Year"),
+    "ytd_q1": ("YTD-Q1", "YTD Q1"),
+    "ytd_q2": ("YTD-Q2", "YTD Q2"),
+    "ytd_q3": ("YTD-Q3", "YTD Q3"),
+    "ytd_q4": ("YTD-Q4", "YTD Q4"),
+    "action": ("操作", "Action"),
+    "reason": ("原因", "Reason"),
+    "version": ("版本", "Version"),
+    "imported_at": ("导入时间", "Imported At"),
+    "adjustment_pct": ("调整(百分点)", "Adjustment (pp)"),
+    "original": ("原始值", "Original"),
+    "zh": ("中文", "Chinese"),
+    "en": ("英文", "English"),
+    "password": ("密码", "Password"),
+    "status": ("状态", "Status"),
+    "note": ("备注", "Note"),
+    "weighted_rate_pct": ("YTD加权支付率", "YTD Weighted Rate"),
+    "weight_total_pct": ("权重合计", "Weight Total"),
+    "final_rate_pct": ("YTD加权支付率（经特殊调整后）", "YTD Weighted Rate (after adjustment)"),
+    "adjusted": ("已调整", "Adjusted"),
+    "sealed": ("是否已封存", "Sealed"),
+    "comment": ("备注", "Comment"),
+    "calculated_at": ("计算时间", "Calculated At"),
+    "target": ("目标", "Target"),
+    "attainment_pct": ("达成率%", "Attainment %"),
+    "rate_pct": ("支付率%", "Payout Rate %"),
+    "weighted_contribution_pct": ("加权贡献%", "Weighted Contribution %"),
+    "person_quarters": ("人-季次", "Person-Quarters"),
+    "avg_payout_rate": ("平均支付率", "Avg Payout Rate"),
+    "plan_count": ("包含计划数", "Plans Containing"),
+    "avg_attainment": ("平均完成率", "Avg Attainment"),
+    "kpi_count": ("KPI 数", "KPI Count"),
+    "kpi_structure": ("KPI 结构（KPI · Curve · 权重）", "KPI Structure (KPI · Curve · Weight)"),
+    "kpi": ("KPI", "KPI"),
+    "curve": ("Curve", "Curve"),
+    "weight": ("权重", "Weight"),
+    "is_active": ("是否启用", "Is Active"),
+    "token": ("令牌", "Token"),
+    "recipient_employee_id": ("收件人工号", "Recipient Employee ID"),
+    "recipient_name": ("收件人", "Recipient"),
+    "template_name": ("模板名", "Template"),
+    "subject": ("主题", "Subject"),
+    "send_mode": ("发送方式", "Send Mode"),
+    "sent_at": ("发送时间", "Sent At"),
+    "read_at": ("已读时间", "Read At"),
+}
+
+
+def header_label(key: str, lang: str) -> str:
+    """Localized display name for a CSV column key: Label table first, then defaults."""
+    zh, en = _labels().get(key, ("", ""))
+    if lang == "zh":
+        return zh or (HEADER_DEFAULTS.get(key, ("", ""))[0]) or key
+    return en or (HEADER_DEFAULTS.get(key, ("", ""))[1]) or key
+
+
+def translate_headers(cols: list[str], lang: str) -> list[str]:
+    """Localize a header row for export (used by every CSV producer)."""
+    return [header_label(c, lang) for c in cols]
+
+
+_alias_map: dict[str, str] | None = None
+
+
+def invalidate_header_alias_cache() -> None:
+    global _alias_map
+    _alias_map = None
+
+
+def _header_aliases() -> dict[str, str]:
+    """alias (any accepted header spelling) -> canonical English key. Built from the
+    canonical keys, their built-in zh/en defaults, and any Label-table header rows.
+    Language-agnostic: an import may present either language."""
+    global _alias_map
+    if _alias_map is not None:
+        return _alias_map
+    amap: dict[str, str] = {}
+
+    def add(alias: str, key: str) -> None:
+        alias = (alias or "").strip()
+        if alias and alias not in amap:
+            amap[alias] = key
+
+    for key, (zh, en) in HEADER_DEFAULTS.items():
+        add(key, key)          # canonical English wins first
+        add(zh, key)
+        add(en, key)
+    for original, (zh, en) in _labels().items():
+        add(original, original)  # a Label row for 'plan_name' also validates the raw key
+        if original in HEADER_DEFAULTS:
+            add(zh, original)
+            add(en, original)
+    _alias_map = amap
+    return amap
+
+
+def normalize_header(raw_key: str) -> str:
+    """Map an incoming column header (English key OR its zh/en translation) back to the
+    canonical English key so parsers stay language-agnostic."""
+    k = (raw_key or "").strip()
+    if not k:
+        return k
+    return _header_aliases().get(k, k)

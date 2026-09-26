@@ -32,7 +32,7 @@
 
 <div class="card">
   <h3>{{ t('deletion_logs') }}</h3>
-  <table>
+  <table class="sortable">
     <tr><th>{{ t('time') }}</th><th>{{ t('target_entity') }}</th><th>{{ t('entity_ref') }}</th><th>{{ t('reason') }}</th><th>{{ t('operator') }}</th></tr>
     {% for l in logs %}
     <tr>

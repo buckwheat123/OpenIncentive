@@ -4,7 +4,7 @@
 <div class="card">
   <h2 style="margin-top:0">{{ t('preview_result') }}</h2>
   <p class="muted">{{ t('preview_note') }}</p>
-  <table>
+  <table class="sortable">
     <tr><th>{{ t('period') }}</th><th>{{ t('employee_id') }} / {{ t('name') }}</th>
         <th class="right">{{ t('adjust_delta') }}</th><th>{{ t('reason') }}</th><th>{{ t('status') }}</th></tr>
     {% for r in rows %}

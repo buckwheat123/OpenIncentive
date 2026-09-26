@@ -1,0 +1,3 @@
+﻿year,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,curve_name,ytd_q1,ytd_q2,ytd_q3,ytd_q4
+2028,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,Sales Incentive,Revenue,60,Standard Curve,1000000,,1400000,
+2028,E003,赵磊,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,,95,

@@ -52,17 +52,36 @@ def current_actuals(db: Session, employee_id: int, period: str) -> dict[str, flo
 
 
 def compute_plan(db: Session, plan: BonusPlan, period: str) -> dict:
-    """Compute one plan's rates for an employee. Pure with respect to DB state."""
+    """Compute one plan's rates for an employee. Pure with respect to DB state.
+
+    v5.0: a KPI with NO actual yet (the usual case for the quarters at the start of a
+    year, before performance data lands) is reported BLANK — attainment_pct and
+    rate_pct are None and the KPI contributes nothing to the weighted rate. It is not
+    silently treated as 0% attainment, so a curve with a guaranteed floor cannot pay
+    out on a KPI that has no data."""
     actuals = current_actuals(db, plan.employee_id, period)
     detail = []
     weighted_rate = 0.0   # sum(weight_pct/100 * rate); weights are NOT renormalized
     total_weight = 0.0    # sum(weight), recorded only to flag when it != 100
     for kpi in plan.kpis:
         actual = actuals.get(kpi.kpi_name)
-        attainment = (actual / kpi.quota * 100.0) if (actual is not None and kpi.quota) else 0.0
+        total_weight += kpi.weight_pct
+        if actual is None:
+            detail.append(
+                {
+                    "kpi": kpi.kpi_name,
+                    "quota": kpi.quota,
+                    "actual": None,
+                    "curve": kpi.curve.name,
+                    "weight_pct": kpi.weight_pct,
+                    "attainment_pct": None,   # blank: no performance data yet
+                    "rate_pct": None,
+                }
+            )
+            continue
+        attainment = (actual / kpi.quota * 100.0) if kpi.quota else 0.0
         rate = payout_rate(kpi.curve.points, attainment, kpi.curve.cap_pct)
         weighted_rate += kpi.weight_pct / 100.0 * rate
-        total_weight += kpi.weight_pct
         detail.append(
             {
                 "kpi": kpi.kpi_name,
@@ -129,6 +148,13 @@ def run_calculation(db: Session, period: str, admin: User, note: str = "",
                 adjustment_pct=calc["adjustment_pct"],
                 final_rate_pct=calc["final_rate_pct"],
                 adjusted=calc["adjusted"],
+                # v5.0: freeze who this person was at calculation time, so a later
+                # department/BG/manager change never rewrites historical quarters.
+                snapshot_name=employee.name,
+                snapshot_employee_id=employee.employee_id,
+                snapshot_bg=employee.bg,
+                snapshot_department=employee.department,
+                snapshot_job_title=employee.job_title,
             )
         )
     db.commit()

@@ -39,6 +39,10 @@
       <a class="btn secondary" href="/letters">{{ t('cancel') }}</a>
     </p>
   </form>
+  <form method="post" action="/letters/mailtest" class="inline" style="margin-top:10px;border-top:1px solid rgba(0,0,0,.08);padding-top:12px">
+    <button class="btn secondary small" type="submit">{{ t('mail_test') }}</button>
+    <span class="muted">{{ t('mail_test_note') }}</span>
+  </form>
 </div>
 <script>
 (function () {

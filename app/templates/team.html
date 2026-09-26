@@ -25,20 +25,21 @@
     {% if level %}<a class="btn secondary small" href="/team?period={{ period }}">{{ t('clear_filter') }}</a>{% endif %}
   </form>
   <p class="muted">{{ t('member_count', n=rows|length) }}{% if avg_rate is not none %} · {{ t('avg_rate') }} <strong>{{ avg_rate }}%</strong>{% endif %}</p>
-  <table>
+  <table class="sortable">
     <tr><th>{{ t('level') }}</th><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('bg') }}</th>
         <th class="right">{{ t('weighted_rate') }}</th><th class="right">{{ t('quarter_total_rate') }}</th>
         <th>{{ t('status') }}</th><th></th></tr>
     {% for row in rows %}
+    {% set r = row.result %}
     <tr>
       <td><span class="tag">{{ row.level }}</span></td>
-      <td>{{ row.emp.employee_id }}</td>
-      <td>{{ row.emp.name }}</td>
-      <td>{{ tl(row.emp.bg) or '-' }}</td>
-      <td class="right">{% if row.result %}{{ row.result.weighted_rate_pct }}%{% else %}-{% endif %}</td>
-      <td class="right">{% if row.result %}<strong>{{ row.result.final_rate_pct }}%</strong>{% else %}-{% endif %}</td>
-      <td>{% if row.result and row.result.adjusted %}<span class="tag warn">{{ t('special_adjust') }}</span>{% elif row.result %}<span class="tag ok">{{ t('calculated') }}</span>{% else %}<span class="tag">{{ t('not_calculated') }}</span>{% endif %}</td>
-      <td><a href="/person/{{ row.emp.id }}?year={{ period.split('-')[0] if period else '' }}">{{ t('detail') }}</a></td>
+      <td>{{ (r.snapshot_employee_id if r and r.snapshot_employee_id else row.emp.employee_id) }}</td>
+      <td>{{ (r.snapshot_name if r and r.snapshot_name else row.emp.name) }}</td>
+      <td>{{ tl(r.snapshot_bg if r and r.snapshot_bg else row.emp.bg) or '-' }}</td>
+      <td class="right" data-sort="{{ r.weighted_rate_pct if r else '' }}">{% if r %}{{ r.weighted_rate_pct }}%{% else %}-{% endif %}</td>
+      <td class="right" data-sort="{{ r.final_rate_pct if r else '' }}">{% if r %}<strong>{{ r.final_rate_pct }}%</strong>{% else %}-{% endif %}</td>
+      <td>{% if r and r.adjusted %}<span class="tag warn">{{ t('special_adjust') }}</span>{% elif r %}<span class="tag ok">{{ t('calculated') }}</span>{% else %}<span class="tag">{{ t('not_calculated') }}</span>{% endif %}</td>
+      <td><a href="/person/{{ row.emp.id }}?year={{ period.split('-')[0] if period else '' }}">{{ t('view_quarter_detail') }}</a></td>
     </tr>
     {% else %}
     <tr><td colspan="8" class="muted">{{ t('no_reports') }}</td></tr>

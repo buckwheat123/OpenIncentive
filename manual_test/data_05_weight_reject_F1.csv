@@ -1,0 +1,4 @@
+﻿year,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,curve_name,ytd_q1,ytd_q2,ytd_q3,ytd_q4
+2028,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,Standard Curve,1000000,,,
+2028,E004,陈静,chen.jing@example.com,Commercial,Commercial Sales,商务专员,M002,EMPLOYEE,Sales Incentive,Revenue,60,Standard Curve,1100000,,,
+2028,E004,陈静,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,90,,,

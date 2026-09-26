@@ -1,0 +1,54 @@
+﻿== 登录账号（种子数据，密码见右）==
+角色,工号 / 登录ID,密码,说明 / 数据作用域
+平台管理员,ADMIN1,admin123,全部 BG、平台后台、Curve、用户、翻译、代操作
+BG 管理员(联席),BGA1,BGA1,管理 Retail + Commercial 两个 BG
+BG 管理员,BGA2,BGA2,仅 Retail（与 BGA1 联席）
+高层经理,SM1,SM1,Retail，团队含 N-1~N-3
+经理,M001,M001,Retail，团队含 N-1/N-2（E003、M003、E001…）
+一线经理,M003,M003,Retail，直属 E001 / E002
+员工,E001,E001,Retail，双计划(Sales Incentive + Quality Bonus)
+员工,E002,E002,Retail
+员工,E003,E003,Retail，2026-Q3 有 +10pp 特批
+商务经理,M002,M002,Commercial
+员工,E004,E004,Commercial（不在 BGA2 作用域）
+HR经理,M900,M900,HR
+员工,E900,E900,HR（通常作为“越权/超范围”负例）
+
+== Sample Data 文件清单与推荐执行顺序 ==
+顺序,文件,用在哪(清单编号),上传目标 / 格式,用途 / 期望,依赖/前置
+—,data_01_quarter_bigtable.csv,C3–C6,/admin/import/preview|execute  季度大表(含 actual),正常导入+多种错误行(员工不存在/Curve不存在/后行覆盖/缺权重),重播种后
+—,data_06_plan_uniqueness_F5.csv,D1–D2,/admin/import/preview|execute  季度大表,F5 计划名唯一：改名 + 自动加后缀 _v1,用 2030-Q1，独立
+—,data_05_weight_reject_F1.csv,E1–E2,/letters/data/preview|execute  年度,F1 权重≠100% 整员工拒绝(E002)，合规员工(E004)照常,用 2028，独立
+—,data_02_letter_quarterly.csv,F2a,/letters/data/preview|execute  季度(无 actual),通知信数据季度格式导入,重播种后
+—,data_03_letter_year.csv,G2,/letters/data/preview|execute  年度(YTD),一行展开为 2028-Q1+Q3、跳过空季度,重播种后
+—,data_04_conflict_year.csv,H1–H3,/letters/data/preview|execute + conflicts.csv  年度,冲突检测：2026-Q2 拦截、2029-Q1 落地；冲突清单下载,需种子 2026 计划(配额2600000/3900000)
+—,data_07_bg_scope.csv,I1–I3,/admin/import/preview (只预览不执行),BG 作用域越权拦截(E900/E004 超范围),用 BGA1、BGA2 分别测
+—,data_08_batch_adjustments.csv,K2,/admin/adjust/preview|execute,批量调整(1 可算 + 1 因封存跳过),先执行 L1 封存 2026-Q1
+—,data_12_delete_plan.csv,M2,/admin/data/delete?entity=plan,软删除 2026-Q4 计划(action=DELETE+reason),重播种后
+—,data_13_delete_actual.csv,M3,/admin/data/delete?entity=actual,软删除 E002 2026-Q3 Revenue 实绩,2026-Q3 未封存前(或重播种后)
+—,data_14_partial_actual.csv,J4,/admin/import/preview|execute + /admin/runs  季度大表(含空 actual),#1 实绩尚空留空：E001 2028-Q1 Sales Incentive，Revenue 有实绩、Customer Satisfaction 实绩留空,重播种后；用 2028-Q1 独立
+—,data_09_user_import.csv,R3–R4,/admin/users/import/preview|execute,批量用户：新建/忽略/表内重复/同表新经理/未知上级代理,重播种后
+—,data_10_user_bump_version.csv,R6,/admin/users/import/execute,改 E003 部门→触发信息版本化归档,重播种后
+—,data_11_labels_import.csv,P2,/admin/labels/import,"翻译标签批量 upsert(original,zh,en)",任意
+
+== 无 CSV 输入、需在界面手工操作的用例 ==
+用例,操作要点,字段/取值示例
+C1/C2 模板下载,点“空白模板 / 选季度预填”直接下载,period=2026-Q1
+F1a/G1 通知信模板,下载通知信模板(季度无 actual / 年度含 ytd_q1..q4),year=2026
+J1 一键计算,管理后台填季度点计算,period=2026-Q3(或先 C4 造 2027-Q1)
+L1/L2/L3 封存,后台勾选 period+多个 BG 点封存,"period=2026-Q1, BG=Retail,Commercial"
+M1 删除模板,选实体+季度下载后手工把 action 填 DELETE 并写 reason,
+O3/O6 模板复制/另存,在模板编辑页“复制并编辑”或 save_as_new,名称加 v2/（副本）
+R2 单建用户,用户列表表单提交,role=BG_ADMIN 时 bg 可填 Retail/Commercial
+R7 管理BG同步,用户行“管理 BG”填斜杠分隔,Retail/HR
+S2 新建曲线,曲线页填 name/points_text/cap_pct,"points_text: 0:0, 80:50, 100:100（折点须为整数，#6）"
+S3 整数强制,提交小数折点/小数封顶应被拒,"报“请以整数格式输入”且不落库（#6）"
+S4 Curve 停用,曲线页“停用”→上传引用它的行→再“启用”,历史不受影响；停用后导入被拒“该Curve已停用，请联系ADM”（#7）
+D3 跨季度唯一,新季度+另一 BG 声明相同组合另起名,提示改用最早登记的计划名（#11）
+N5 计划清单导出,导出页点“下载计划清单 CSV”,含 人-季次 / 平均支付率 / KPI 结构（#12）
+N6 KPI 清单导出,导出页点“下载 KPI 清单 CSV”,含 包含计划数 / 平均完成率（#13）
+R8 花名册批量启停,先“导出花名册”→改 是否启用 Y/N→上传 status preview/execute,本地化表头；未变化与操作者本人跳过（#5）
+O10 通知信记录导出,发信记录页导出（全部或指定季度）,本地化表头发信明细 CSV（#16）
+O11 邮件连通性自检,撰写页点“测试邮件配置”,依次探测 SMTP/POP3；SMTP_DISABLED=1 时提示 outbox（#17）
+Q5 计算时点快照,改员工部门后重新计算并回看旧季度,旧季度仍显示旧部门、新计算显新部门（#4）
+Q6 管理端下钻,BG 列表/个人页点进某员工某年详情,ADM/BG 管理员可查看某员工某季度明细（#3）

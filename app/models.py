@@ -49,13 +49,18 @@ class User(Base):
 
 
 class Curve(Base):
+    """Payout curve. ``is_active`` (v5.0) lets an admin retire a curve: retired curves
+    stay readable for every plan/result already calculated (historical numbers never
+    change) but are rejected by new imports and hidden from new-plan choices."""
+
     __tablename__ = "curves"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     description: Mapped[str] = mapped_column(Text, default="")
     points_json: Mapped[str] = mapped_column(Text)  # [[attainment_pct, payout_pct], ...]
-    cap_pct: Mapped[float | None] = mapped_column(Float)
+    cap_pct: Mapped[int | None] = mapped_column(Integer)  # integer cap, None = no cap
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -148,7 +153,12 @@ class CalcRun(Base):
 
 
 class BonusResult(Base):
-    """Rates only (no bonus base stored). final = weighted + adjustment delta."""
+    """Rates only (no bonus base stored). final = weighted + adjustment delta.
+
+    v5.0: the employee's org attributes are SNAPSHOT at calculation time
+    (``snapshot_*`` columns). When a person later moves department / changes BG or
+    title, already-calculated quarters keep showing the info they were calculated
+    with, while new runs pick up the new info."""
 
     __tablename__ = "bonus_results"
     __table_args__ = (UniqueConstraint("run_id", "employee_id", "plan_name", name="uq_result"),)
@@ -164,6 +174,13 @@ class BonusResult(Base):
     adjustment_pct: Mapped[float] = mapped_column(Float, default=0.0)  # special adjustment delta
     final_rate_pct: Mapped[float] = mapped_column(Float, default=0.0)  # weighted + adjustment
     adjusted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # ---- employee-info snapshot captured when this result was calculated (v5.0) ----
+    snapshot_name: Mapped[str] = mapped_column(String(100), default="")
+    snapshot_employee_id: Mapped[str] = mapped_column(String(50), default="")
+    snapshot_bg: Mapped[str] = mapped_column(String(100), default="")
+    snapshot_department: Mapped[str] = mapped_column(String(100), default="")
+    snapshot_job_title: Mapped[str] = mapped_column(String(100), default="")
 
     employee: Mapped[User] = relationship()
 

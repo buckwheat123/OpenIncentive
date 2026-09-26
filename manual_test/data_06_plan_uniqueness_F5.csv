@@ -1,0 +1,6 @@
+﻿period,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,quota,curve_name,actual
+2030-Q1,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Alpha Plan,Revenue,60,1000000,Standard Curve,900000
+2030-Q1,E001,张伟,,,,,,,Alpha Plan,Customer Satisfaction,40,90,Quality Curve,92
+2030-Q1,E002,李娜,li.na@example.com,Retail,Sales South,销售代表,M003,EMPLOYEE,Beta Plan,Revenue,60,1000000,Standard Curve,950000
+2030-Q1,E002,李娜,,,,,,,Beta Plan,Customer Satisfaction,40,90,Quality Curve,88
+2030-Q1,E003,赵磊,zhao.lei@example.com,Retail,Sales North,高级销售代表,M001,EMPLOYEE,Alpha Plan,Customer Satisfaction,100,90,Quality Curve,90

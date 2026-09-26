@@ -39,7 +39,7 @@
 
 <div class="card">
   <h3>{{ t('adjust_logs') }}</h3>
-  <table>
+  <table class="sortable">
     <tr><th>{{ t('time') }}</th><th>{{ t('employee_id') }} / {{ t('name') }}</th><th>{{ t('period') }}</th>
         <th class="right">{{ t('adjust_delta') }}</th><th>{{ t('reason') }}</th><th>{{ t('operator') }}</th></tr>
     {% for a in adjustments %}

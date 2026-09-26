@@ -4,15 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ t('app_title') }}{% endblock %}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=5.1">
+<script src="/static/app.js?v=5.1" defer></script>
 </head>
 <body>
+<div class="utility-bar">
+  <span class="tagline">JUST CALCULATE IT™</span>
+  <span class="spacer"></span>
+  <span>{{ t('app_title') }}</span>
+</div>
 <header>
-  <div class="brand">{{ t('app_title') }}</div>
+  <div class="brand"><a class="brand-name" href="/me">{{ t('app_title') }}</a></div>
   <nav>
     {% if user %}
       {% if user.role == 'ADMIN' %}<a href="/admin">{{ t('admin_console') }}</a>{% endif %}
-      {% if user.role in ('BG_ADMIN', 'ADMIN') %}<a href="/bg">{{ t('bg_view') }}</a><a href="/admin/import">{{ t('csv_import') }}</a><a href="/letters">{{ t('letters_short') }}</a><a href="/letters/data">{{ t('letter_data_import') }}</a>{% endif %}
+      {% if user.role in ('BG_ADMIN', 'ADMIN') %}<a href="/bg">{{ t('bg_view') }}</a><a href="/admin/import">{{ t('csv_import') }}</a><a href="/letters">{{ t('letters_short') }}</a>{% endif %}
       {% if user.role in ('MANAGER', 'ADMIN') %}<a href="/team">{{ t('team') }}</a>{% endif %}
       <a href="/me">{{ t('my_bonus') }}</a>
       <span class="who">{{ user.name }}（{{ user.role }}）</span>

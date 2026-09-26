@@ -18,10 +18,14 @@
     </div>
     <button class="btn" type="submit" formaction="/admin/export.csv">{{ t('download_summary_csv') }}</button>
     <button class="btn secondary" type="submit" formaction="/admin/export_kpi.csv">{{ t('download_kpi_csv') }}</button>
+    <button class="btn secondary" type="submit" formaction="/admin/export_plans.csv">{{ t('dl_plans_csv') }}</button>
+    <button class="btn secondary" type="submit" formaction="/admin/export_kpis.csv">{{ t('dl_kpis_csv') }}</button>
   </form>
   <p class="muted">{{ t('export_note') }}</p>
   <hr>
   <p><strong>{{ t('export_summary_title') }}</strong><br><span class="muted">{{ t('export_summary_note') }}</span></p>
   <p><strong>{{ t('export_kpi_title') }}</strong><br><span class="muted">{{ t('export_kpi_note') }}</span></p>
+  <p><strong>{{ t('export_plans') }}</strong><br><span class="muted">{{ t('export_plans_note') }}</span></p>
+  <p><strong>{{ t('export_kpis') }}</strong><br><span class="muted">{{ t('export_kpis_note') }}</span></p>
 </div>
 {% endblock %}

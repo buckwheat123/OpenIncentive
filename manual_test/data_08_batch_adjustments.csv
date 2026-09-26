@@ -1,0 +1,3 @@
+﻿period,employee_id,name,adjustment_pct,reason
+2027-Q1,E002,李娜,5,批量测试特批
+2026-Q1,E001,张伟,-3,应被跳过：已封存

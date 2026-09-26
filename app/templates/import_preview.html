@@ -4,11 +4,8 @@
 <div class="card">
   <h3>{{ t('preview_result') }}</h3>
   <p class="summary-counts">{{ t('summary_counts', ok=summary.ok, ig=summary.ignored, er=summary.errors) }}</p>
-  {% if summary.conflicts %}
-  <p class="summary-counts" style="color:#b00">{{ t('conflict_counts', n=summary.conflicts) }}</p>
-  {% endif %}
   <p class="muted">{{ t('preview_note') }}</p>
-  <table>
+  <table class="sortable">
     <tr>
       <th>{{ t('period') }}</th><th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th>
       <th>{{ t('plan') }}</th><th>{{ t('kpi_col') }}</th><th>{{ t('weight_col') }}</th>

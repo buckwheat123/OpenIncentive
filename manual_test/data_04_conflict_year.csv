@@ -1,0 +1,5 @@
+﻿year,employee_id,name,email,bg,department,job_title,manager_id,role,plan_name,kpi_name,weight_pct,curve_name,ytd_q1,ytd_q2,ytd_q3,ytd_q4
+2026,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,Standard Curve,,999999,3900000,
+2026,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,,5,90,
+2029,E001,张伟,zhang.wei@example.com,Retail,Sales East,销售代表,M003,EMPLOYEE,Sales Incentive,Revenue,60,Standard Curve,800000,,,
+2029,E001,张伟,,,,,,,Sales Incentive,Customer Satisfaction,40,Quality Curve,85,,,
