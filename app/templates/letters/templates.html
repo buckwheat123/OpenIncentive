@@ -18,7 +18,7 @@
       <td>{{ tpl.creator.name if tpl.creator else '-' }}</td>
       <td>{{ tpl.updated_at|fmt }}</td>
       <td style="white-space:nowrap">
-        <a href="/letters/templates/{{ tpl.id }}/edit">{{ t('edit') }}</a>
+        <a class="btn small secondary" href="/letters/templates/{{ tpl.id }}/edit">{{ t('edit') }}</a>
         <form method="post" action="/letters/templates/{{ tpl.id }}/copy" style="display:inline">
           <button class="btn small secondary" type="submit">{{ t('copy') }}</button>
         </form>

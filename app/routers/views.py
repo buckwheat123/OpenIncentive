@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from ..csvio import export_kpi_rows, export_results_rows, to_csv
 from ..deps import bg_allowed, bg_filter, get_db, require_roles, require_user
-from ..i18n import Translator, get_lang
+from ..i18n import Translator, fmt_pct, get_lang
 from ..models import BonusPlan, BonusResult, CalcRun, User
 from ..ui import render
 
@@ -155,8 +155,8 @@ def build_plan_table(db, uid: int, year: int, plan_name: str, tr: Translator) ->
             d = q["detail"].get(kpi)
             target_cells.append(_fmt(kpi_obj.quota) if kpi_obj else "")
             if d and d.get("actual") is not None:
-                attain_cells.append(f"{d['attainment_pct']:g}%")
-                rate_cells.append(f"{d['rate_pct']:g}%")
+                attain_cells.append(fmt_pct(d["attainment_pct"]))
+                rate_cells.append(fmt_pct(d["rate_pct"]))
             else:
                 attain_cells.append("")
                 rate_cells.append("")
@@ -176,11 +176,11 @@ def build_plan_table(db, uid: int, year: int, plan_name: str, tr: Translator) ->
             if not r:
                 cells.append("")
             elif kind == "weighted":
-                cells.append(f"{r.weighted_rate_pct:g}%")
+                cells.append(fmt_pct(r.weighted_rate_pct))
             elif kind == "adj":
-                cells.append(f"{r.adjustment_pct:+g}%" if r.adjusted else "")
+                cells.append(fmt_pct(r.adjustment_pct, signed=True) if r.adjusted else "")
             else:
-                cells.append(f"{r.final_rate_pct:g}%")
+                cells.append(fmt_pct(r.final_rate_pct))
         rows.append({"label": tr.t(key), "cells": cells, "kind": "summary"})
 
     return {"plan_name": plan_name, "quarters": ["Q1", "Q2", "Q3", "Q4"], "rows": rows}
@@ -276,7 +276,7 @@ def bg(request: Request, period: str | None = None,
     periods = all_periods(db)
     period = period or (periods[0] if periods else None)
     scope = bg_filter(user)
-    stmt = select(User).where(User.role != "ADMIN")
+    stmt = select(User).where(User.role != "ADMIN", User.is_active == True)  # noqa: E712
     if scope is not None:
         stmt = stmt.where(User.bg.in_(scope if scope else ["__none__"]))
     members = db.scalars(stmt.order_by(User.bg, User.employee_id)).all()

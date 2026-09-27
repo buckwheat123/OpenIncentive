@@ -2,7 +2,7 @@
 A0,环境,重置为种子数据,-,命令行,在项目根目录执行  .venv/Scripts/python.exe seed.py  （重建库，含 2026 Q1-Q4 计划+实绩、已算 Q1-Q3、双模板、E001 示例信）,-,打印“种子数据完成”，输出可登录账号列表,,,每轮完整走查前执行一次；库无迁移，改模型后需重播种
 A1,环境,启动服务,-,命令行,.venv/Scripts/python.exe run.py  后浏览器打开 http://127.0.0.1:8000,-,登录页正常显示，默认中文,,,停止：Ctrl+C 或 taskkill //F //IM python.exe
 A2,环境,登录页,-,GET /login,输入账号密码登录,-,登录成功跳转到对应角色首页,,,
-A3,环境,发信不触网（可复现）,-,命令行,手动测发信 / 重播种时统一加环境变量 SMTP_DISABLED=1（如 set SMTP_DISABLED=1& .venv/Scripts/python.exe seed.py）,-,邮件一律降级到 data/outbox/*.html，绝不联网；测试与演示结果确定,,,"真实 163 SMTP/POP3 凭据放 .env（已 gitignore），仅测 #17 时临时用；UI 已按 #10 统一为运动风黑白高对比（NAIKY 假 logo）"
+A3,环境,发信不触网（可复现）,-,命令行,手动测发信 / 重播种时统一加环境变量 SMTP_DISABLED=1（如 set SMTP_DISABLED=1& .venv/Scripts/python.exe seed.py）,-,邮件一律降级到 data/outbox/*.html，绝不联网；测试与演示结果确定,,,"真实 163 SMTP/POP3 凭据放 .env（已 gitignore），仅测 #17 时临时用；UI 已按 v5.1 重构为 NIKE 官网设计语言（纯文字 wordmark，无图形 logo），v5.2 起支持右上角三色主题切换"
 B1,权限,多角色登录,见“清单与账号”表,POST /login,分别用 ADMIN1/BGA1/BGA2/SM1/M001/M003/E001 登录,-,各自进入正确首页（管理后台 / BG 总览 / 团队 / 我的）,,,密码见 manifest
 B2,权限,员工越权访问后台,E001,GET /admin,直接访问 /admin,-,303 重定向拒绝，进不去后台,,,
 B3,权限,员工访问他人个人页,E001,GET /person/{他人id},访问 E002 的 person 页,-,303 拒绝（同级不可见）,,,
@@ -81,3 +81,14 @@ S2,Curve,新建/更新曲线,ADMIN1,POST /admin/curves,"填 name + points_text(�
 S3,Curve,整数强制 + 重名校验（#6）,ADMIN1,POST /admin/curves,提交小数折点或小数封顶，或重复名,-,小数折点/小数封顶被拒并提示“请以整数格式输入”（#6）且不落库；重名提示“曲线已存在”,,,#6
 S4,Curve,停用（软下线）不影响历史（#7）,ADMIN1,POST /admin/curves/{cid}/toggle ; POST /admin/import/preview,停用某 Curve；再上传引用该 Curve 的行；然后重新启用,-,停用回显“已停用”；已算/已封存数据不受影响；引用停用 Curve 的导入被拒并提示“该Curve已停用，请联系ADM”（#7）；重新启用后同一行可再导入,,,#7
 U1,整合,BG管理员也能用大表导入,BGA1,GET /admin/import,以 BGA1 打开导入页,-,可进入（import 页对 BG_ADMIN 开放），作用域限其管理的 BG,,,
+T1,用户版本化(v5.2),列表内一键「更新」,ADMIN1,POST /admin/users/{uid}/update,在用户列表某行直接改 姓名/邮箱/部门/职位/角色/BG 后点该行「更新」按钮,-,提示“已更新用户”；当前行显示新资料；无需跳转独立编辑页，改动即时保存,,,v5.2：更新按钮内联在每行
+T2,用户版本化(v5.2),不覆盖历史+旧版本可见,ADMIN1,GET /admin/users,承 T1 更新后回看用户列表,-,旧资料不被覆盖：在原行下方新增一条只读“停用”版本行（带“版本 v{n}”标签、显示 changed_by），当前启用行版本号 +1,,,版本列 + 停用行
+T3,用户版本化(v5.2),停用旧版本进导出表,ADMIN1,GET /admin/users/export.csv,承 T1 后导出花名册 CSV,-,同一工号出现多行：启用行 is_active=Y（version=最新版本），其下停用旧版本 is_active=N 逐条列出；CSV 含「版本」列,,,旧版本在导出表可见
+T4,用户版本化(v5.2),单一启用不变式,ADMIN1,GET /admin/users ; /admin/users/export.csv,对同一工号连续多次更新后核对,-,无论更新几次，该工号任何时候有且仅有一条 is_active=Y 记录，其余全部为停用历史版本,,,“一工号一条启用”硬约束
+T5,用户版本化(v5.2),邮箱唯一防冲突,ADMIN1,POST /admin/users/{uid}/update,把某用户邮箱改成另一在职用户已用的邮箱,-,拒绝保存并提示邮箱已存在；不生成新的停用版本（未污染历史）,,,更新前跨他人校验
+T6,主题(v5.2),右上角三色圆形切换,任意,GET /theme/{code},点右上角三个圆形双色色块（经典/莫兰迪/森林）之一,-,整站配色即时切换；被选色块显示高亮外圈；<html data-theme> 随之变为 default/morandi/forest,,,v5.2 新增
+T7,主题(v5.2),选择记忆+预设,任意,GET /theme/morandi,选莫兰迪后重新打开任意页面,-,写 Cookie theme=morandi 并 303 回跳来源页；再访问任意页面仍是莫兰迪；未选择时预设为“经典”（当前配色）,,,预设=经典，不改配色
+T8,视觉(v5.2),全站百分比一位小数,ADMIN1/E001,GET /admin/runs/{rid} ; /me ; 各导出,核对页面与导出中所有百分比,-,加权支付率/达成率/支付率/调整百分点等一律精确到小数点后 1 位（如 99.7%、+10.0pp），无多余位,,,含调整回显 delta
+T9,视觉(v5.2),业绩矩阵 Q1–Q4 等宽,ADMIN1/E001,GET /me ; /person/{uid},查看个人四联季业绩表,-,Q1 至 Q4 各列宽度一致（table.matrix 固定布局），不随内容伸缩,,,v5.1 表格样式
+T10,视觉(v5.2),模板管理/编辑为按钮色块,BGA1,GET /letters/templates ; /letters/log,查看模板列表与发信记录页,-,“模板管理”“编辑”均渲染为按钮色块（btn small secondary），非纯文字链接,,,v5.2
+T11,视觉(v5.2),表头点击直接排序,ADMIN1,GET /admin/users ; 各列表页,点击表头列名切换升/降序,-,表头可点击直接排序并有方向指示；页面不再出现独立“排序方式”下拉菜单,,,v5.2：移除排序下拉

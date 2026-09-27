@@ -44,6 +44,7 @@
   </form>
 </div>
 <div class="card">
+  <p class="muted">{{ t('update_note') }}</p>
   <form id="batch-toggle" method="post" action="/admin/users/batch-toggle" class="inline batch-bar">
     <button class="btn danger small" type="submit" name="action" value="disable">{{ t('batch_disable') }}</button>
     <button class="btn secondary small" type="submit" name="action" value="enable">{{ t('batch_enable') }}</button>
@@ -51,14 +52,22 @@
   <table class="sortable">
     <tr>
       <th class="no-sort"><input type="checkbox" onclick="document.querySelectorAll('input[name=uids]').forEach(function(c){c.checked=this.checked;}, this)"></th>
-      <th>{{ t('employee_id') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th><th>{{ t('role') }}</th>
+      <th>{{ t('employee_id') }}</th><th>{{ t('version_col') }}</th><th>{{ t('name') }}</th><th>{{ t('email') }}</th><th>{{ t('role') }}</th>
       <th>{{ t('bg') }}</th><th>{{ t('department') }}</th><th>{{ t('job_title') }}</th>
       <th>{{ t('info_updated_at') }}</th><th>{{ t('status') }}</th><th></th></tr>
     {% for u in users %}
     <tr>
       <td>{% if u.id != user.id %}<input type="checkbox" name="uids" value="{{ u.id }}" form="batch-toggle">{% endif %}</td>
-      <td>{{ u.employee_id }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
-      <td>{{ u.role }}</td>
+      <td>{{ u.employee_id }}</td>
+      <td><span class="tag ok">{{ t('current_version') }}</span></td>
+      <td><input name="name" size="10" value="{{ u.name }}" form="upd-{{ u.id }}"></td>
+      <td><input name="email" size="18" value="{{ u.email }}" form="upd-{{ u.id }}"></td>
+      <td>
+        <select name="role" form="upd-{{ u.id }}">
+          {% for r in ['EMPLOYEE','MANAGER','BG_ADMIN','ADMIN'] %}
+          <option value="{{ r }}"{% if r == u.role %} selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select>
+      </td>
       <td>
         {% if u.role == 'BG_ADMIN' %}
           <form method="post" action="/admin/users/{{ u.id }}/managed_bgs" class="inline-form">
@@ -66,12 +75,17 @@
                    value="{{ ((u.bg_scope|sort)|join('/')) if u.bg_scope else (u.bg or '') }}">
             <button class="btn tiny" type="submit">{{ t('save') }}</button>
           </form>
-        {% else %}{{ tl(u.bg) or '-' }}{% endif %}
+        {% else %}<input name="bg" size="10" value="{{ u.bg or '' }}" form="upd-{{ u.id }}">{% endif %}
       </td>
-      <td>{{ tl(u.department) or '-' }}</td><td>{{ tl(u.job_title) or '-' }}</td>
+      <td><input name="department" size="12" value="{{ u.department or '' }}" form="upd-{{ u.id }}"></td>
+      <td><input name="job_title" size="12" value="{{ u.job_title or '' }}" form="upd-{{ u.id }}"></td>
       <td>{{ u.updated_at|fmt }}</td>
       <td>{% if u.is_active %}<span class="tag ok">{{ t('active') }}</span>{% else %}<span class="tag">{{ t('inactive') }}</span>{% endif %}</td>
-      <td>{% if u.id != user.id %}
+      <td class="actions">
+        <form id="upd-{{ u.id }}" method="post" action="/admin/users/{{ u.id }}/update" style="display:inline">
+          <button class="btn small" type="submit">{{ t('update') }}</button>
+        </form>
+        {% if u.id != user.id %}
         <form method="post" action="/admin/users/{{ u.id }}/toggle" style="margin:0;display:inline">
           <button class="btn small secondary" type="submit">{% if u.is_active %}{{ t('disable') }}{% else %}{{ t('enable') }}{% endif %}</button>
         </form>
@@ -79,8 +93,25 @@
         <form method="post" action="/admin/proxy/{{ u.id }}" style="margin:0;display:inline"
               onsubmit="return confirm('{{ t('proxy_confirm') }}')">
           <button class="btn small" type="submit">{{ t('proxy') }}</button>
-        </form>{% endif %}{% endif %}</td>
+        </form>{% endif %}{% endif %}
+      </td>
     </tr>
+    {% for v in versions_by_user.get(u.id, []) %}
+    <tr class="row-inactive">
+      <td></td>
+      <td class="muted">{{ u.employee_id }}</td>
+      <td><span class="tag muted">{{ t('superseded_version') }} v{{ v.version }}</span></td>
+      <td class="muted">{{ v.name }}</td>
+      <td class="muted">{{ v.email }}</td>
+      <td class="muted">{{ v.role }}</td>
+      <td class="muted">{{ tl(v.bg) or '-' }}</td>
+      <td class="muted">{{ tl(v.department) or '-' }}</td>
+      <td class="muted">{{ tl(v.job_title) or '-' }}</td>
+      <td class="muted">{{ v.ended_at|fmt }}</td>
+      <td><span class="tag">{{ t('inactive') }}</span></td>
+      <td class="muted">{{ t('changed_by') }}{% if v.changer %} · {{ v.changer.name }}{% endif %}</td>
+    </tr>
+    {% endfor %}
     {% endfor %}
   </table>
 </div>

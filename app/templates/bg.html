@@ -29,8 +29,8 @@
       <td>{{ tl(r.snapshot_department if r and r.snapshot_department else row.emp.department) or '-' }}</td>
       <td>{{ tl(r.snapshot_job_title if r and r.snapshot_job_title else row.emp.job_title) or '-' }}</td>
       <td>{{ row.emp.role }}</td>
-      <td class="right" data-sort="{{ r.weighted_rate_pct if r else '' }}">{% if r %}{{ r.weighted_rate_pct }}%{% else %}-{% endif %}</td>
-      <td class="right" data-sort="{{ r.final_rate_pct if r else '' }}">{% if r %}<strong>{{ r.final_rate_pct }}%</strong>{% else %}-{% endif %}</td>
+      <td class="right" data-sort="{{ r.weighted_rate_pct if r else '' }}">{% if r %}{{ r.weighted_rate_pct|pct }}{% else %}-{% endif %}</td>
+      <td class="right" data-sort="{{ r.final_rate_pct if r else '' }}">{% if r %}<strong>{{ r.final_rate_pct|pct }}</strong>{% else %}-{% endif %}</td>
       <td>{% if r and r.adjusted %}<span class="tag warn">{{ t('special_adjust') }}</span>{% elif r %}<span class="tag ok">{{ t('calculated') }}</span>{% else %}<span class="tag">{{ t('not_calculated') }}</span>{% endif %}</td>
       <td><a href="/person/{{ row.emp.id }}?year={{ period.split('-')[0] if period else '' }}">{{ t('view_quarter_detail') }}</a></td>
     </tr>
@@ -38,6 +38,6 @@
     <tr><td colspan="10" class="muted">{{ t('no_members') }}</td></tr>
     {% endfor %}
   </table>
-  {% if period %}<p>{{ t('avg_rate') }}：<strong>{{ avg_rate if avg_rate is not none else '-' }}{% if avg_rate is not none %}%{% endif %}</strong></p>{% endif %}
+  {% if period %}<p>{{ t('avg_rate') }}：<strong>{% if avg_rate is not none %}{{ avg_rate|pct }}{% else %}-{% endif %}</strong></p>{% endif %}
 </div>
 {% endblock %}

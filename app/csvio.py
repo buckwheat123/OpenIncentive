@@ -24,7 +24,8 @@ from .calc import is_locked
 from .deps import apply_managed_bgs, archive_user_info, bg_allowed, current_info_tuple
 from .i18n import (DEFAULT_LANG, Translator, invalidate_label_cache, normalize_header,
                    translate_headers)
-from .models import Actual, BonusPlan, Curve, DataOpLog, Label, PlanKpi, User, UserManagedBg
+from .models import (Actual, BonusPlan, Curve, DataOpLog, Label, PlanKpi, User, UserManagedBg,
+                     UserVersion)
 from .security import hash_password
 
 
@@ -170,6 +171,17 @@ def fmt_num(value) -> str:
     if f.is_integer():
         return str(int(f))
     return f"{f:.4f}".rstrip("0").rstrip(".")
+
+
+def _p1(value) -> str:
+    """Fixed one-decimal percentage value for CSV columns (no % sign): 99.7, 100.0, 60.0.
+    Blank for None. Keeps exported rates aligned with the UI's one-decimal rule."""
+    if value is None or value == "":
+        return ""
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _group_info_raw(rows: list[dict]) -> dict:
@@ -995,8 +1007,8 @@ def export_results_rows(db: Session, bg: str | None = None, period: str | None =
         ).first()
         calculated_at = run.created_at.strftime("%Y-%m-%d %H:%M") if run else ""
         rows.append([p, e_id, e_name, e_bg, e_dept, e_title, r.plan_name,
-                     f"{r.weighted_rate_pct:.2f}", fmt_num(weight_total),
-                     f"{r.adjustment_pct:.2f}", f"{r.final_rate_pct:.2f}",
+                     _p1(r.weighted_rate_pct), _p1(weight_total),
+                     _p1(r.adjustment_pct), _p1(r.final_rate_pct),
                      "Y" if r.adjusted else "", sealed, comment, calculated_at])
     return rows
 
@@ -1041,8 +1053,8 @@ def export_kpi_rows(db: Session, bg: str | None = None, period: str | None = Non
             rows.append([p, e_id, e_name, e_bg, e_dept, e_title, r.plan_name,
                          d.get("kpi", ""), fmt_num(d.get("quota")),
                          "" if actual is None else fmt_num(actual),
-                         d.get("curve", ""), fmt_num(weight),
-                         fmt_num(d.get("attainment_pct")), fmt_num(rate), fmt_num(contribution),
+                         d.get("curve", ""), _p1(weight),
+                         _p1(d.get("attainment_pct")), _p1(rate), _p1(contribution),
                          sealed, calculated_at])
     return rows
 
@@ -1077,9 +1089,9 @@ def export_plans_rows(db: Session, bg: str | None = None,
     rows = [header]
     for name in order:
         st = structures[name]
-        struct_txt = "  +  ".join(f"{k} · {c} · {fmt_num(w)}%" for k, c, w in st)
+        struct_txt = "  +  ".join(f"{k} · {c} · {_p1(w)}%" for k, c, w in st)
         count = pq.get(name, 0)
-        avg = round(rate_sum[name] / count, 2) if count else ""
+        avg = _p1(rate_sum[name] / count) if count else ""
         rows.append([name, len(st), struct_txt, count, avg])
     return rows
 
@@ -1113,23 +1125,32 @@ def export_kpis_rows(db: Session, bg: str | None = None,
     rows = [header]
     for k in sorted(set(kpi_plans) | set(attainment)):
         vals = attainment.get(k)
-        avg = round(sum(vals) / len(vals), 2) if vals else ""
+        avg = _p1(sum(vals) / len(vals)) if vals else ""
         rows.append([k, len(kpi_plans.get(k, ())), avg])
     return rows
 
 
-USER_STATUS_HEADER = ["employee_id", "name", "email", "role", "bg", "is_active"]
+USER_STATUS_HEADER = ["employee_id", "name", "email", "role", "version", "bg", "is_active"]
 
 
 def user_status_rows(db: Session, lang: str = DEFAULT_LANG) -> list[list]:
-    """v5.0 #5: export the full user roster with a prefilled is_active (Y/N) column so the
-    admin can flip the flag and re-upload it to batch enable/disable accounts."""
+    """v5.0 #5 / v5.2: export the full user roster with a prefilled is_active (Y/N)
+    column so the admin can flip the flag and re-upload it to batch enable/disable
+    accounts. Because info updates archive a deactivated version instead of overwriting
+    history, each user's superseded versions are appended right after their live row so
+    the old data is visible in the export too (is_active=N)."""
     header = translate_headers(USER_STATUS_HEADER, lang)
     rows = [header]
     users = db.scalars(select(User).order_by(User.employee_id)).all()
     for u in users:
-        rows.append([u.employee_id, u.name, u.email or "", u.role, u.bg or "",
+        versions = (db.query(UserVersion).filter(UserVersion.user_id == u.id)
+                    .order_by(UserVersion.version.desc()).all())
+        live_version = (versions[0].version + 1) if versions else 1
+        rows.append([u.employee_id, u.name, u.email or "", u.role, live_version, u.bg or "",
                      "Y" if u.is_active else "N"])
+        for v in versions:   # 停用旧版本也出现在导出表上
+            rows.append([u.employee_id, v.name, v.email or "", v.role, v.version,
+                         v.bg or "", "N"])
     return rows
 
 

@@ -182,6 +182,13 @@ th.sort-desc::after { content: "▼"; opacity: 1; color: var(--accent); }
 td .actions { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
 /* transposed employee metric × quarter matrix (person.html) */
+table.matrix { table-layout: fixed; }
+table.matrix th, table.matrix td { overflow-wrap: anywhere; }
+table.matrix th:first-child, table.matrix td:first-child { width: 36%; }
+table.matrix th:nth-child(2), table.matrix td:nth-child(2),
+table.matrix th:nth-child(3), table.matrix td:nth-child(3),
+table.matrix th:nth-child(4), table.matrix td:nth-child(4),
+table.matrix th:nth-child(5), table.matrix td:nth-child(5) { width: 16%; }
 table.matrix th { position: static; }
 table.matrix td:first-child, table.matrix th:first-child { text-align: left; font-weight: 700; }
 table.matrix tr:hover td { background: var(--panel); }
@@ -312,6 +319,22 @@ textarea { width: 100%; min-height: 160px; font-family: "Consolas", "SFMono-Regu
 .lang-switch a:hover { background: var(--panel); }
 .lang-switch a.active { background: var(--ink); color: var(--accent); }
 
+/* ---------- Global theme switch (circular two-tone swatches) ---------- */
+.theme-switch { display: inline-flex; align-items: center; gap: 8px; }
+.theme-switch .theme-label {
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted);
+}
+.theme-switch .swatch {
+  width: 22px; height: 22px; border-radius: 50%; padding: 0; display: inline-block;
+  border: 1px solid var(--line);
+  background: linear-gradient(135deg, var(--c1) 0 50%, var(--c2) 50% 100%);
+  box-shadow: inset 0 0 0 1px rgba(10,10,10,.08);
+  cursor: pointer; transition: transform .12s ease, box-shadow .12s ease;
+}
+.theme-switch .swatch:hover { transform: scale(1.12); }
+.theme-switch .swatch.active { outline: 2px solid var(--ink); outline-offset: 2px; }
+
 /* ---------- Dashboard stat tiles ---------- */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border: 1px solid var(--line); margin-bottom: 20px; }
 .stat { padding: 18px 20px; border-right: 1px solid var(--line); }
@@ -326,4 +349,57 @@ textarea { width: 100%; min-height: 160px; font-family: "Consolas", "SFMono-Regu
   main { padding: 0 14px; }
   .hero-inner { padding: 32px 16px; }
   .grid { grid-template-columns: 1fr 1fr; }
+  .theme-switch .theme-label { display: none; }
+}
+
+/* ==========================================================================
+   Alternative color themes (v5.2). The classic palette is the default :root
+   above; only non-default themes override the tokens. Text stays on the
+   neutral/ink scale so hierarchy and the NIKE flat structure are preserved.
+   ========================================================================== */
+
+/* ---------- Morandi: dusty, low-saturation warm neutrals ---------- */
+html[data-theme="morandi"] {
+  --ink:        #4a463f;   /* soft charcoal-brown instead of near-black */
+  --ink-soft:   #6b645a;
+  --paper:      #ece7e1;   /* warm bone canvas */
+  --panel:      #ded6cc;
+  --bone:       #ded6cc;
+  --line:       #cec4b8;
+  --line-soft:  #cec4b8;
+  --hair-strong:#6b6259;
+  --muted:      #8b8275;
+
+  --accent:       #9c6b5e; /* dusty brick */
+  --accent-deep:  #7e5348;
+  --accent-soft:  #e8dad3;
+
+  --danger:       #a6584f; /* muted terracotta-red */
+  --danger-deep:  #854440;
+  --red:          #a6584f;
+  --amber:        #9a7a3a; /* dusty ochre */
+  --green:        #6e8b6e; /* muted sage */
+}
+
+/* ---------- Forest: deep greens, mossy neutrals ---------- */
+html[data-theme="forest"] {
+  --ink:        #1e2a22;   /* near-black green */
+  --ink-soft:   #33463a;
+  --paper:      #f2f5f1;   /* very light green-white */
+  --panel:      #e2e9e2;
+  --bone:       #e2e9e2;
+  --line:       #c9d6ca;
+  --line-soft:  #c9d6ca;
+  --hair-strong:#23402f;
+  --muted:      #5c6e60;
+
+  --accent:       #2e6b4f; /* forest green */
+  --accent-deep:  #1f4d38;
+  --accent-soft:  #dbeae1;
+
+  --danger:       #b4472f; /* warm rust, distinct from the green accent */
+  --danger-deep:  #8f3823;
+  --red:          #b4472f;
+  --amber:        #9a6b1f;
+  --green:        #2e6b4f;
 }

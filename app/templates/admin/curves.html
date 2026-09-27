@@ -23,9 +23,9 @@
     {% for c in curves %}
     <tr{% if not c.is_active %} class="row-inactive"{% endif %}>
       <td>{{ c.name }}</td><td class="muted">{{ c.points_text }}</td>
-      <td data-sort="{{ c.cap_pct if c.cap_pct is not none else '' }}">{% if c.cap_pct is not none %}{{ c.cap_pct|g }}%{% else %}{{ t('no_cap') }}{% endif %}</td>
+      <td data-sort="{{ c.cap_pct if c.cap_pct is not none else '' }}">{% if c.cap_pct is not none %}{{ c.cap_pct|pct }}{% else %}{{ t('no_cap') }}{% endif %}</td>
       <td>{{ c.description }}</td>
-      <td class="muted">{% for s in c.segments %}{{ s.x1|g }}–{{ s.x2|g }}%: {{ s.slope|round(2) }}{{ ', ' if not loop.last }}{% endfor %}</td>
+      <td class="muted">{% for s in c.segments %}{{ s.x1|pct }}–{{ s.x2|pct }}: {{ s.slope|round(2) }}{{ ', ' if not loop.last }}{% endfor %}</td>
       <td>{% if c.is_active %}<span class="tag ok">{{ t('curve_active') }}</span>{% else %}<span class="tag warn">{{ t('curve_inactive') }}</span>{% endif %}</td>
       <td>{{ c.updated_at|fmt }}</td>
       <td class="actions">

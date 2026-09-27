@@ -19,11 +19,11 @@
       <td>{{ r.snapshot_name or r.employee.name }}</td>
       <td>{{ tl(r.snapshot_bg or r.employee.bg) }}</td>
       <td>{{ tl(r.plan_name) }}</td>
-      <td class="right" data-sort="{{ r.weighted_rate_pct }}">{{ r.weighted_rate_pct }}%</td>
-      <td class="right">{% if r.adjusted %}{{ '%+g'|format(r.adjustment_pct) }} pp{% else %}-{% endif %}</td>
-      <td class="right" data-sort="{{ r.final_rate_pct }}"><strong>{{ r.final_rate_pct }}%</strong></td>
+      <td class="right" data-sort="{{ r.weighted_rate_pct }}">{{ r.weighted_rate_pct|pct }}</td>
+      <td class="right">{% if r.adjusted %}{{ '%+.1f'|format(r.adjustment_pct) }} pp{% else %}-{% endif %}</td>
+      <td class="right" data-sort="{{ r.final_rate_pct }}"><strong>{{ r.final_rate_pct|pct }}</strong></td>
       <td>
-        {% if (r.weight_total_pct - 100)|abs > 0.000001 %}<span class="tag warn">{{ t('weight_not_100_comment') }}（{{ t('weight_total') }} {{ r.weight_total_pct|g }}%）</span>{% endif %}
+        {% if (r.weight_total_pct - 100)|abs > 0.000001 %}<span class="tag warn">{{ t('weight_not_100_comment') }}（{{ t('weight_total') }} {{ r.weight_total_pct|pct }}）</span>{% endif %}
         {% if r.adjusted %}<span class="tag warn">{{ t('special_adjust') }}</span>{% endif %}
       </td>
       <td>
@@ -38,11 +38,11 @@
               <td>{{ tl(d.kpi) }}</td>
               <td class="right">{{ d.quota|num }}</td>
               <td class="right">{% if d.actual is not none %}{{ d.actual|num }}{% endif %}</td>
-              <td class="right">{% if d.attainment_pct is not none %}{{ d.attainment_pct }}%{% endif %}</td>
+              <td class="right">{% if d.attainment_pct is not none %}{{ d.attainment_pct|pct }}{% endif %}</td>
               <td>{{ tl(d.curve) }}</td>
-              <td class="right">{{ d.weight_pct|g }}%</td>
-              <td class="right">{% if d.rate_pct is not none %}{{ d.rate_pct }}%{% endif %}</td>
-              <td class="right">{% if d.rate_pct is not none %}{{ (d.weight_pct / 100 * d.rate_pct)|g }}%{% endif %}</td>
+              <td class="right">{{ d.weight_pct|pct }}</td>
+              <td class="right">{% if d.rate_pct is not none %}{{ d.rate_pct|pct }}{% endif %}</td>
+              <td class="right">{% if d.rate_pct is not none %}{{ (d.weight_pct / 100 * d.rate_pct)|pct }}{% endif %}</td>
             </tr>
             {% endfor %}
           </table>

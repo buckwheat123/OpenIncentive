@@ -19,8 +19,8 @@ from ..csvio import (_split_bgs, actual_delete_template_rows, adjustment_templat
                      plan_delete_template_rows, recent_periods, to_csv, user_error_rows,
                      user_status_rows, user_summary, user_template_rows)
 from ..curves import IntegerRequired, parse_cap, parse_points
-from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, apply_managed_bgs, bg_filter, get_db, home_for,
-                    make_session, require_roles)
+from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, apply_managed_bgs, archive_user_info,
+                    bg_filter, get_db, home_for, make_session, require_roles, user_versions)
 from ..i18n import Translator, get_lang, invalidate_label_cache
 from ..models import Adjustment, BonusPlan, BonusResult, CalcRun, Curve, DataOpLog, Label, Lock, User, utcnow
 from ..security import hash_password
@@ -62,7 +62,57 @@ def dashboard(request: Request, user=Depends(require_roles("ADMIN")), db=Depends
 @router.get("/users")
 def users_page(request: Request, user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
     users = db.scalars(select(User).order_by(User.employee_id)).all()
-    return render(request, "admin/users.html", user=user, users=users)
+    versions_by_user: dict[int, list] = {}
+    for u in users:
+        vs = user_versions(db, u)
+        if vs:
+            versions_by_user[u.id] = vs
+    return render(request, "admin/users.html", user=user, users=users,
+                  versions_by_user=versions_by_user)
+
+
+@router.post("/users/{uid}/update")
+def users_update(uid: int, request: Request, name: str = Form(""), email: str = Form(""),
+                 role: str = Form(""), bg: str = Form(""), department: str = Form(""),
+                 job_title: str = Form(""),
+                 user=Depends(require_roles("ADMIN")), db=Depends(get_db)):
+    """One-click user-info update (v5.2). History is never overwritten: the live record
+    keeps the NEW values and stays the single active row for the employee ID, while the
+    previous attribute set is archived as a deactivated version that still shows in the
+    list and the export sheet."""
+    t = _t(request)
+    target = db.get(User, uid)
+    if target is None:
+        return flash("/admin/users", t.t("msg_user_missing"))
+    role_u = (role or "").strip().upper() or target.role
+    changes: dict = {}
+    for field, value in (("name", name), ("email", email), ("department", department),
+                         ("job_title", job_title)):
+        v = (value or "").strip()
+        if v and v != (getattr(target, field) or ""):
+            changes[field] = v
+    if role_u != target.role:
+        changes["role"] = role_u
+    if target.role != "BG_ADMIN" and role_u != "BG_ADMIN":
+        bgv = (bg or "").strip()
+        if bgv and bgv != (target.bg or ""):
+            changes["bg"] = bgv
+    # email must stay unique among the OTHER active users
+    if "email" in changes:
+        clash = db.scalars(select(User).where(User.email == changes["email"],
+                                             User.id != target.id)).first()
+        if clash:
+            return flash("/admin/users", t.t("msg_user_exists", uid=changes["email"]))
+    if not changes:
+        return flash("/admin/users", t.t("msg_user_no_change", uid=target.employee_id))
+    archive_user_info(db, target, user)      # 停用封存旧信息，不覆盖历史
+    for field, value in changes.items():
+        setattr(target, field, value)
+    target.updated_at = utcnow()
+    db.add(DataOpLog(op_type="UPDATE", entity="user", entity_ref=target.employee_id,
+                     reason="info update: " + ", ".join(sorted(changes)), created_by=user.id))
+    db.commit()
+    return flash("/admin/users", t.t("msg_user_updated", uid=target.employee_id))
 
 
 @router.post("/users")
@@ -428,7 +478,7 @@ def adjust_save(request: Request, employee_id: int = Form(...), period: str = Fo
         apply_adjustment(db, employee_id, period, adjustment_pct, reason.strip(), user, get_lang(request))
     except ValueError as e:
         return flash("/admin/adjust", str(e))
-    return flash("/admin/adjust", t.t("msg_adjust_recorded", period=period, delta=f"{adjustment_pct:+g}"))
+    return flash("/admin/adjust", t.t("msg_adjust_recorded", period=period, delta=f"{adjustment_pct:+.1f}"))
 
 
 @router.get("/adjust/template.csv")

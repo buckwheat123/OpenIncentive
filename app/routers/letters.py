@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from ..csvio import to_csv
 from ..deps import bg_filter, current_user, get_db, require_user
-from ..i18n import Translator, get_lang, translate_headers
+from ..i18n import Translator, fmt_pct, get_lang, translate_headers
 from ..mailer import send_mail, smtp_enabled
 from ..models import Letter, LetterTemplate, User
 from ..ui import render
@@ -77,7 +77,7 @@ def build_plan_table(db, recipient: User, period: str, tr: Translator) -> str:
         return f"<p>{period}: {tr.t('no_plans_year')}</p>"
     rows = ""
     for kpi in plan.kpis:
-        rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{kpi.weight_pct:g}%</td>"
+        rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{fmt_pct(kpi.weight_pct)}</td>"
                  f"<td>{kpi.quota:,.2f}</td><td>{tr.tl(kpi.curve.name)}</td></tr>")
     return (f"<table {TABLE_STYLE}>"
             f"<tr><th>KPI</th><th>{tr.t('weight_col')}</th><th>{tr.t('target')}</th>"
@@ -106,21 +106,23 @@ def build_performance_table(db, recipient: User, period: str, tr: Translator) ->
         if d and d.get("actual") is not None:
             has_any_actual = True
             actual = f"{d['actual']:,.2f}"
-            attain = f"{d['attainment_pct']:.1f}%"
+            attain = fmt_pct(d["attainment_pct"])
             raw = d["rate_pct"]
             contrib = kpi.weight_pct / 100.0 * raw
             total_contrib += contrib
-            raw_s, contrib_s = f"{raw:.1f}%", f"{contrib:.2f}%"
+            raw_s, contrib_s = fmt_pct(raw), fmt_pct(contrib)
         else:
             actual = attain = raw_s = contrib_s = ""   # v5.0 blank — no performance data
-        rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{kpi.weight_pct:g}%</td>"
+        rows += (f"<tr><td>{tr.tl(kpi.kpi_name)}</td><td>{fmt_pct(kpi.weight_pct)}</td>"
                  f"<td>{kpi.quota:,.2f}</td><td>{actual}</td><td>{attain}</td>"
                  f"<td>{tr.tl(kpi.curve.name)}</td><td>{raw_s}</td><td>{contrib_s}</td></tr>")
     summary = ""
     if result and has_any_actual:
-        adj = (f"　{tr.t('special_adjust')}：{result.adjustment_pct:+.2f} pp" if result.adjusted else "")
-        final_part = (f"　{tr.t('quarter_total_rate')}：{result.final_rate_pct:.2f}%" if result.adjusted else "")
-        summary = (f"<p><strong>{tr.t('weighted_rate')}：{result.weighted_rate_pct:.2f}%{adj}"
+        adj = (f"　{tr.t('special_adjust')}：{fmt_pct(result.adjustment_pct, signed=True)} pp"
+               if result.adjusted else "")
+        final_part = (f"　{tr.t('quarter_total_rate')}：{fmt_pct(result.final_rate_pct)}"
+                      if result.adjusted else "")
+        summary = (f"<p><strong>{tr.t('weighted_rate')}：{fmt_pct(result.weighted_rate_pct)}{adj}"
                    f"{final_part}</strong></p>")
     return (f"<table {TABLE_STYLE}>"
             f"<tr><th>KPI</th><th>{tr.t('weight_col')}</th><th>{tr.t('target')}</th>"
@@ -142,10 +144,10 @@ def build_curve_summary(db, recipient: User, period: str, tr: Translator) -> str
         seen.add(curve.id)
         rows = ""
         for seg in curve.segments:
-            rows += (f"<tr><td>{seg['x1']:g}% → {seg['x2']:g}%</td>"
-                     f"<td>{seg['y1']:g}% → {seg['y2']:g}%</td>"
+            rows += (f"<tr><td>{fmt_pct(seg['x1'])} → {fmt_pct(seg['x2'])}</td>"
+                     f"<td>{fmt_pct(seg['y1'])} → {fmt_pct(seg['y2'])}</td>"
                      f"<td>{seg['slope']:.2f}</td></tr>")
-        cap = (f"<p>{tr.t('cap')}：{curve.cap_pct:g}%</p>"
+        cap = (f"<p>{tr.t('cap')}：{fmt_pct(curve.cap_pct)}</p>"
                if curve.cap_pct else f"<p>{tr.t('no_cap')}</p>")
         desc = f"<p>{tr.tl(curve.description)}</p>" if curve.description else ""
         parts.append(

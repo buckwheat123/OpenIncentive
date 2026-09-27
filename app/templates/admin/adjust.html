@@ -47,7 +47,7 @@
       <td>{{ a.created_at|fmt }}</td>
       <td>{{ a.employee.name }}（{{ a.employee.employee_id }}）</td>
       <td>{{ a.period }}</td>
-      <td class="right">{{ '%+g'|format(a.adjustment_pct) }}</td>
+      <td class="right">{{ '%+.1f'|format(a.adjustment_pct) }} pp</td>
       <td>{{ a.reason }}</td>
       <td>{{ a.creator.name if a.creator else '-' }}</td>
     </tr>

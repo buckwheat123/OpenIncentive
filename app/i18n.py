@@ -15,9 +15,32 @@ LANGS = ("zh", "en")
 DEFAULT_LANG = "zh"
 LANG_COOKIE = "lang"
 
+THEMES = ("default", "morandi", "forest")
+DEFAULT_THEME = "default"
+THEME_COOKIE = "theme"
+
 
 def _has_cjk(s: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in s)
+
+
+def fmt_pct(value, signed: bool = False, decimals: int = 1) -> str:
+    """Render a percentage value with a FIXED number of decimals (default 1) and a
+    trailing ``%`` — e.g. ``99.7%``, ``100.0%``, ``88.0%``. Every percentage shown in
+    the app funnels through here so the precision is uniform. ``None``/empty render
+    blank; a non-numeric value is passed through untouched. ``signed=True`` prefixes a
+    ``+`` for positive deltas (used by special adjustments)."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        value = int(value)
+    if not isinstance(value, (int, float)):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+    sign = "+" if (signed and value > 0) else ""
+    return f"{sign}{value:.{decimals}f}%"
 
 
 # key -> (zh, en)
@@ -431,13 +454,34 @@ STRINGS: dict[str, tuple[str, str]] = {
     "msg_managed_bgs_saved": ("已更新 {uid} 管理的 BG：{bgs}",
                               "Updated managed BGs for {uid}: {bgs}"),
     "info_history": ("信息变更历史", "Info change history"),
-    "info_history_note": ("每次资料被覆盖前，旧版本会封存于此（is_active=否）",
-                          "Superseded snapshots are archived here (is_active = No)"),
+    "info_history_note": ("每次资料更新都会新建一条启用记录并停用旧记录；旧版本仍保留于此，并出现在用户列表与导出表中",
+                          "Every update creates a new active record and deactivates the old one; superseded versions stay here and also appear in the user list and exports"),
     "version": ("版本", "Version"),
     "ended_at": ("封存时间", "Archived at"),
     "changed_by": ("变更人", "Changed by"),
     "no_versions": ("暂无历史版本", "No archived versions yet"),
     "is_active_col": ("启用", "Active"),
+
+    # ---------- user info update → new version (v5.2) ----------
+    "update": ("更新", "Update"),
+    "version_col": ("版本", "Ver."),
+    "current_version": ("当前", "Current"),
+    "superseded_version": ("旧版本", "Superseded"),
+    "msg_user_updated": ("已更新用户 {uid}：新资料已生效，旧版本（停用）已保留，可在列表与导出中查看",
+                         "User {uid} updated: new info is active, the superseded (disabled) version is kept and visible in the list and exports"),
+    "msg_user_no_change": ("{uid} 资料未发生变化，无需更新", "No changes for {uid}; nothing to update"),
+    "msg_user_missing": ("目标用户不存在", "Target user not found"),
+    "msg_employee_not_found": ("工号 {uid} 没有可更新的启用记录", "No active record to update for employee ID {uid}"),
+    "update_note": ("修改资料后点「更新」即可保存。系统不会覆盖历史信息：旧版本会被停用并保留，仍显示在列表与导出表中；任一员工号任何时候只有一条启用记录",
+                    "Edit the fields and press Update to save. History is never overwritten — the old version is deactivated but retained and still shown in the list and export sheet. At any time an employee ID has exactly one active record"),
+
+    # ---------- global color theme switcher (v5.2) ----------
+    "theme": ("配色", "Theme"),
+    "theme_default": ("经典", "Classic"),
+    "theme_morandi": ("莫兰迪", "Morandi"),
+    "theme_forest": ("森林", "Forest"),
+    "theme_hint": ("选择配色方案：经典（当前）/ 莫兰迪 / 森林",
+                   "Pick a color theme: Classic (current) / Morandi / Forest"),
 
     # ---------- curve status (v5.0 #6/#7) ----------
     "curve_status": ("状态", "Status"),
@@ -502,6 +546,11 @@ STRINGS: dict[str, tuple[str, str]] = {
 def get_lang(request: Request) -> str:
     lang = request.cookies.get(LANG_COOKIE, DEFAULT_LANG)
     return lang if lang in LANGS else DEFAULT_LANG
+
+
+def get_theme(request: Request) -> str:
+    theme = request.cookies.get(THEME_COOKIE, DEFAULT_THEME)
+    return theme if theme in THEMES else DEFAULT_THEME
 
 
 class Translator:

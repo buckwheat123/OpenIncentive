@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="{{ 'zh-CN' if lang == 'zh' else 'en' }}">
+<html lang="{{ 'zh-CN' if lang == 'zh' else 'en' }}" data-theme="{{ theme }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ t('app_title') }}{% endblock %}</title>
-<link rel="stylesheet" href="/static/style.css?v=5.1">
-<script src="/static/app.js?v=5.1" defer></script>
+<link rel="stylesheet" href="/static/style.css?v=5.2">
+<script src="/static/app.js?v=5.2" defer></script>
 </head>
 <body>
 <div class="utility-bar">
@@ -24,6 +24,15 @@
       <span class="who">{{ user.name }}（{{ user.role }}）</span>
       <a class="btn small" href="/logout">{{ t('logout') }}</a>
     {% endif %}
+    <span class="theme-switch" title="{{ t('theme_hint') }}">
+      <span class="theme-label">{{ t('theme') }}</span>
+      <a class="swatch{% if theme == 'default' %} active{% endif %}" href="/theme/default"
+         title="{{ t('theme_default') }}" style="--c1:#0a0a0a;--c2:#fa5400"></a>
+      <a class="swatch{% if theme == 'morandi' %} active{% endif %}" href="/theme/morandi"
+         title="{{ t('theme_morandi') }}" style="--c1:#9c6b5e;--c2:#6e8b6e"></a>
+      <a class="swatch{% if theme == 'forest' %} active{% endif %}" href="/theme/forest"
+         title="{{ t('theme_forest') }}" style="--c1:#2e6b4f;--c2:#6b8e5a"></a>
+    </span>
     <span class="lang-switch">
       <a class="{% if lang == 'zh' %}active{% endif %}" href="/lang/zh">中</a>
       <a class="{% if lang == 'en' %}active{% endif %}" href="/lang/en">EN</a>

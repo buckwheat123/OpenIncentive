@@ -6,7 +6,8 @@ from sqlalchemy import or_, select
 
 from ..deps import (SESSION_COOKIE, SESSION_MAX_AGE, current_user, get_db, home_for,
                     make_session, session_payload)
-from ..i18n import DEFAULT_LANG, LANGS, LANG_COOKIE, Translator
+from ..i18n import (DEFAULT_LANG, DEFAULT_THEME, LANGS, LANG_COOKIE, THEMES,
+                    THEME_COOKIE, Translator)
 from ..models import DataOpLog, User
 from ..security import verify_password
 from ..ui import render
@@ -21,6 +22,17 @@ def set_lang(code: str, request: Request):
     referer = request.headers.get("referer") or "/"
     response = RedirectResponse(referer, status_code=303)
     response.set_cookie(LANG_COOKIE, lang, max_age=365 * 24 * 3600, samesite="lax")
+    return response
+
+
+@router.get("/theme/{code}")
+def set_theme(code: str, request: Request):
+    """Switch the global color theme (default/morandi/forest) via cookie and return to
+    the previous page. Default keeps the current palette."""
+    theme = code if code in THEMES else DEFAULT_THEME
+    referer = request.headers.get("referer") or "/"
+    response = RedirectResponse(referer, status_code=303)
+    response.set_cookie(THEME_COOKIE, theme, max_age=365 * 24 * 3600, samesite="lax")
     return response
 
 
