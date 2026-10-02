@@ -147,7 +147,7 @@
 
 <header class="site">
   <h1>OpenIncentive · 项目分析图解</h1>
-  <div class="sub">奖金计算与沟通平台 · v5.2 · 2026-09-27 快照</div>
+  <div class="sub">奖金计算与沟通平台 · v5.2 · 2026-10-02 修订（与当前代码逐条校对）</div>
   <div class="badges">
     <span class="badge">FastAPI</span>
     <span class="badge">SQLAlchemy 2.x</span>
@@ -167,7 +167,7 @@
 <!-- =================== 1. 概览指标 =================== -->
 <section>
   <h2><span class="num">01</span>版本快照 & 核心指标</h2>
-  <p class="lead">v5.0 收敛计算口径与逐记录版本化，v5.1 以 NIKE 官网设计语言深度重构视觉，v5.2 打磨百分比精度、季度矩阵等宽、用户资料一键更新与三色主题。核心口径不变：加权支付率按原状加权加总、绝不归一化。当前 e2e 覆盖 34 步全绿。</p>
+  <p class="lead">v5.0 收敛计算口径（<b>不再提供 letter 独立数据导入</b>、Curve 整数与停用、季度实绩空值留空、计划名跨 BG 跨季度全库唯一）与逐记录版本化；v5.1 以 NIKE 官网设计语言深度重构视觉；v5.2 打磨百分比精度、季度矩阵等宽、用户资料一键更新与三色主题。核心口径不变：加权支付率按原状加权加总、绝不归一化。当前 e2e 覆盖 <b>34 步全绿</b>。</p>
   <div class="kv">
     <div class="item"><div class="lbl">当前版本</div><div class="val">v5.2</div></div>
     <div class="item"><div class="lbl">主要角色</div><div class="val">ADMIN / BG_ADMIN / MANAGER / EMPLOYEE</div></div>
@@ -220,27 +220,28 @@
 <!-- =================== 2. 功能矩阵 =================== -->
 <section>
   <h2><span class="num">02</span>项目功能矩阵</h2>
-  <p class="lead">五大能力域覆盖「导入 → 计算 → 沟通 → 归档 → 运维」全链路。</p>
+  <p class="lead">八大能力域覆盖「导入 → 计算 → 沟通 → 归档 → 运维」全链路。</p>
   <div class="card-grid">
     <div class="card">
       <h3>① 数据导入 <span class="tag">版本化</span></h3>
-      <p class="desc">季度大表 + 年度通知信数据 + 用户花名册，三张核心表。</p>
+      <p class="desc">季度大表 + 用户花名册 + 翻译标签，三张核心表（v5.0 起通知信不再自带数据）。</p>
       <ul>
-        <li>季度大表：一张 CSV 覆盖员工/KPI/目标/实绩/Curve，逐行校验</li>
-        <li>表内后行覆盖前行（latest-wins），员工信息合并跨行</li>
-        <li><b>F5</b> 计划名唯一化：同组合并入既有名，同名不同组合自动加 <code>_vN</code></li>
-        <li>同表新建上级 + ADMIN 代理回退</li>
-        <li>员工身份字段变更 → 旧记录封存为 UserVersion</li>
+        <li>季度大表：一张 CSV 覆盖员工/KPI/目标/实绩/Curve，逐行校验，走 <code>/admin/import</code></li>
+        <li>表内后行覆盖前行（latest-wins），员工信息跨行合并</li>
+        <li><b>#11</b> 计划名唯一化：签名 <code>(KPI, Curve, 权重)</code> 同组合在<b>跨 BG 且跨季度</b>只登记一次；同名不同组合自动加 <code>_vN</code></li>
+        <li>同表新建上级 + ADMIN 代理回退（未知上级不再报错）</li>
+        <li>员工身份字段变更 → 旧记录归档为 <code>UserVersion</code>（is_active=False），live User 就地更新</li>
       </ul>
     </div>
     <div class="card">
-      <h3>② 冲突 & 权重拦截 <span class="tag">E2b / F1</span></h3>
-      <p class="desc">通知信数据 vs 季度计算数据的一致性守门 + 权重完整性。</p>
+      <h3>② 校验与留空 <span class="tag">v5.0</span></h3>
+      <p class="desc">Curve 整数与「停用拒绝新引用」，季度实绩尚空一律留空，不做权重归一。</p>
       <ul>
-        <li>展开后 (period, employee, plan, KPI) 与 current BonusPlan 目标比对</li>
-        <li>预览即标记「与季度计算数据冲突」并拦截；计算数据为权威</li>
-        <li>独立 <code>conflicts.csv</code>：四个 existing_qN 列 + 逐季 old vs new</li>
-        <li><b>F1</b> 通知信任一计划权重≠100% → 整员工全部行拒绝（计算大表不受限）</li>
+        <li><b>#6</b> Curve 封顶与折点强制整数；小数输入即时拒绝「请以整数格式输入」且不落库</li>
+        <li><b>#7</b> Curve 软下线：历史计算不受影响；一旦引用停用 Curve 的行提交导入即被拒「该Curve已停用，请联系ADM」</li>
+        <li><b>#1</b> 某 KPI 当季尚无实际业绩时，达成率 / 支付率 / 加权贡献一律<b>留空</b>，不再按 0 计</li>
+        <li><b>#11</b> 权重合计≠100% <b>不拦截</b>：仅在结果记 <code>weight_total_pct</code>，导出「备注」列提示「权重合计非 100%」；口径仍是加权加总、绝不归一</li>
+        <li>系统不提供未加权（简单平均）支付率，相关字段/列/文案全部移除</li>
       </ul>
     </div>
     <div class="card">
@@ -331,17 +332,17 @@
 
     <div class="pipe-row">
       <div class="lane-label">BG 管理员</div>
-      <div class="step"><span class="role bg">导入</span><strong>年度通知信数据</strong><small>year + ytd_q1~q4</small></div>
+      <div class="step"><span class="role bg">导入</span><strong>权限内季度大表</strong><small>/admin/import 作用域限其管理 BG</small></div>
       <span class="arrow">→</span>
-      <div class="step"><span class="role bg">拦截</span><strong>冲突 + F1 权重校验</strong><small>≠100% 整员工拒绝</small></div>
+      <div class="step"><span class="role bg">审阅</span><strong>预览逐行</strong><small>可导入/忽略/报错 · 不落库</small></div>
       <span class="arrow">→</span>
-      <div class="step"><span class="role bg">下载</span><strong>conflicts.csv</strong><small>修复后重传</small></div>
+      <div class="step"><span class="role bg">沟通</span><strong>F4 共享模板</strong><small>只读 / 复制并编辑（副本）</small></div>
       <span class="arrow">→</span>
-      <div class="step"><span class="role bg">执行</span><strong>展开为季度计划</strong><small>最新覆盖 + 版本化</small></div>
+      <div class="step"><span class="role bg">群发</span><strong>选收件人 · 一键发送</strong><small>渲染当前库数据、无独立信件数据</small></div>
       <span class="arrow">→</span>
-      <div class="step"><span class="role bg">沟通</span><strong>F4 共享模板 / 群发</strong><small>只读 / 复制并编辑</small></div>
+      <div class="step"><span class="role bg">跟踪</span><strong>已阅状态 · 记录导出</strong><small>letter log + #16 CSV</small></div>
       <span class="arrow">→</span>
-      <div class="step"><span class="role bg">跟踪</span><strong>已阅状态</strong><small>letter log</small></div>
+      <div class="step"><span class="role bg">自检</span><strong>#17 邮件连通性</strong><small>SMTP/POP3 逐步探测</small></div>
     </div>
 
     <div class="pipe-row">
@@ -550,24 +551,24 @@
         <div><span class="file">db.py</span><span class="cm"># Engine / SessionLocal / Base + create_all</span></div>
         <div><span class="file">deps.py</span><span class="cm"># 依赖注入：current_user、bg_scope、bg_filter/bg_allowed</span></div>
         <div><span class="file">security.py</span><span class="cm"># PBKDF2 口令哈希 + itsdangerous 签名 cookie 会话</span></div>
-        <div><span class="hl"><span class="file">csvio.py</span></span><span class="cm"># <b>核心：CSV 解析 / 冲突检测 / F1 权重100%校验 / F5 计划名唯一化 / 年度展开 / 版本化写入</b></span></div>
+        <div><span class="hl"><span class="file">csvio.py</span></span><span class="cm"># <b>核心：大表 / 用户 / 花名册 / 标签 各类 CSV 解析 + 校验 + #11 计划名全局唯一化 + 版本化写入 + 双表 + 计划/KPI 清单导出</b></span></div>
         <div><span class="file">calc.py</span><span class="cm"># Curve 匹配 + 加权支付率 Σ(weight%×rate)÷100</span></div>
         <div><span class="file">curves.py</span><span class="cm"># Curve 配置 CRUD 与区间解析</span></div>
         <div><span class="hl"><span class="file">i18n.py</span></span><span class="cm"># <b>Translator：界面字符串 t() + DB 字段值翻译 tl() + 数字格式化</b></span></div>
-        <div><span class="file">mailer.py</span><span class="cm"># 邮件发送（本地 outbox 目录，无外部 SMTP）</span></div>
+        <div><span class="file">mailer.py</span><span class="cm"># 邮件发送：接 163 SMTP/POP3（凭据走 git-ignored 的 .env）；无凭据或 <code>SMTP_DISABLED=1</code> 时降级到本地 <code>data/outbox/*.html</code>；v5.0 #17 连通性自检</span></div>
         <div><span class="file">ui.py</span><span class="cm"># Jinja2 环境、模板辅助、分页 / 徽章</span></div>
         <div><span class="file">routers/</span></div>
         <div class="branch">
-          <div><span class="file">auth.py</span><span class="cm"># 登录 / 登出 / 语言切换</span></div>
-          <div><span class="hl"><span class="file">admin.py</span></span><span class="cm"># <b>ADMIN 全能力：导入 / 计算 / 调整 / 封存 / 导出 / 用户管理 / 代操作</b></span></div>
-          <div><span class="file">letters.py</span><span class="cm"># 通知信全流程：模板 / 年度数据导入 / 冲突清单 / 群发 / 查看 / 已阅</span></div>
+          <div><span class="file">auth.py</span><span class="cm"># 登录 / 登出 / 语言切换（<code>/lang/{code}</code>） / <b>主题切换（<code>/theme/{code}</code>，v5.2）</b></span></div>
+          <div><span class="hl"><span class="file">admin.py</span></span><span class="cm"># <b>ADMIN 全能力：大表导入 / 一键计算 / 调整 / 封存 / 多张导出 / 用户管理（v5.2 行内更新 + UserVersion） / 代操作 / 数据删除 / Curve / Label</b></span></div>
+          <div><span class="file">letters.py</span><span class="cm"># 通知信全流程：模板 / 撰写群发 / 已阅 / 记录导出 / 邮件自检（v5.0 起不再自带数据）</span></div>
           <div><span class="file">views.py</span><span class="cm"># BG / 团队 / 个人页 · 角色分区</span></div>
         </div>
         <div><span class="file">templates/</span><span class="cm"># Jinja2 服务端模板</span></div>
         <div class="branch">
           <div><span class="file">base.html · login.html · import_preview.html</span></div>
-          <div><span class="file">admin/</span><span class="cm"># 后台页面：dashboard / import / adjust / curves / data / users / export / labels / run_detail / user_import_preview（F3 已移除 calc）</span></div>
-          <div><span class="file">letters/</span><span class="cm"># 7 个信件页：compose / templates / template_edit / <b>data</b> / log / view / not_found</span></div>
+          <div><span class="file">admin/</span><span class="cm"># 后台页面：dashboard / import / import 预览 · 调整 adjust + adjust_preview · curves · data（删除） · users（v5.2 行内更新） · user_import_preview · user_status_preview · export · labels · run_detail（F3 calc 页已移除）</span></div>
+          <div><span class="file">letters/</span><span class="cm"># <b>6 个信件页：compose · templates · template_edit · log · view · not_found</b>（v5.0 起 data 页已移除）</span></div>
           <div><span class="file">bg.html · team.html · person.html</span><span class="cm"># 角色视图</span></div>
         </div>
         <div><span class="file">static/style.css</span><span class="cm"># 全站唯一样式（无构建、无 CDN）</span></div>
@@ -575,15 +576,15 @@
 
       <div style="margin-top: 6px;"><span class="file">tests/</span><span class="cm"># 两级测试</span></div>
       <div class="branch">
-        <div><span class="file">test_calc.py</span><span class="cm"># 离线：Curve 匹配 + 加权口径（无需服务器）</span></div>
-        <div><span class="file">test_e2e.py</span><span class="cm"># 端到端 33 步：登录 / 导入(F5) / 冲突(F1) / 一键计算(F2) / 调整 / 封存 / 导出(F6) / 通知信 / 模板协作(F4) / 版本 / 多 BG</span></div>
+        <div><span class="file">test_calc.py</span><span class="cm"># 离线：Curve 匹配 + 加权口径 + #6 整数强制 + #1 空实绩留空（无需服务器）</span></div>
+        <div><span class="file">test_e2e.py</span><span class="cm"># 端到端 <b>34 步</b>：登录 / 大表导入(#11 F5 唯一化 + #13 用户花名册) / 一键计算(F2) / 调整 / 多 BG 封存 / 五张导出(F6 + #12 计划清单 + #13 KPI 清单 + #5 花名册) / 通知信与 F4 模板协作 / 已阅 / 用户版本化(#4 + v5.2) / 多 BG(#10) / Curve 整数与停用(#6/#7) / 语言(#2) / 邮件自检(#17) / 员工 YTD 术语(#8/#14)</span></div>
       </div>
 
-      <div style="margin-top: 6px;"><span class="file">sample_data/</span><span class="cm"># 演示数据（可上传）</span></div>
+      <div style="margin-top: 6px;"><span class="file">sample_data/</span><span class="cm"># 演示数据（可直接上传）</span></div>
       <div class="branch">
-        <div><span class="file">quarter_import.csv</span><span class="cm"># 季度大表示例</span></div>
-        <div><span class="file">letter_data.csv</span><span class="cm"># <b>年度格式通知信数据示例（v4.1 已改写）</b></span></div>
-        <div><span class="file">users_import.csv</span><span class="cm"># 员工花名册示例</span></div>
+        <div><span class="file">quarter_import.csv</span><span class="cm"># 季度大表示例（走 /admin/import）</span></div>
+        <div><span class="file">letter_data.csv</span><span class="cm"># 已改为大表形状：v5.0 起 /letters/data 移除，通知信直接渲染库内数据</span></div>
+        <div><span class="file">users_import.csv</span><span class="cm"># 员工花名册示例（走 /admin/users/import）</span></div>
       </div>
 
       <div style="margin-top: 6px;"><span class="file">seed.py · run.py</span><span class="cm"># 造数据 / 启动 uvicorn</span></div>
@@ -618,8 +619,8 @@
       <div class="v">同一 <code>(期间 + 员工 + 计划 + KPI)</code> 重复行，后出现的行覆盖先前值，员工信息跨行合并。</div>
     </div>
     <div class="rule warn">
-      <div class="k">冲突处理权威源</div>
-      <div class="v">通知信数据 vs 季度计算数据：<b>以季度计算为准</b>。冲突行预览即拦截，执行二次校验确保不写入；提供 <code>conflicts.csv</code> 供用户修复原表后重传。</div>
+      <div class="k">通知信数据来源（v5.0 起）</div>
+      <div class="v">信件<b>不再自带独立数据</b>：仅渲染库里当前 (收件人, 期间) 的 <code>BonusPlan</code> / <code>Actual</code> / <code>BonusResult</code>。年度格式 <code>/letters/data/*</code> 与 F1 权重 100% 拦截、conflicts.csv 已随 v5.0 一并移除；当季尚无实绩的 KPI 在正文一律留空。</div>
     </div>
     <div class="rule">
       <div class="k">BG 多对多</div>
@@ -630,12 +631,12 @@
       <div class="v">覆盖身份字段前，先落一条停用的 <code>UserVersion</code>（新信息启用、旧信息停用封存）；<code>/person</code> 页向管理员开放历史。<b>v5.2</b>：用户管理页可<b>行内编辑 + 「更新」按钮</b>一键保存，被停用的旧版本同时出现在<b>用户列表与花名册导出 CSV</b>；任一员工号任何时候<b>只有一条启用记录</b>。</div>
     </div>
     <div class="rule">
-      <div class="k">F5 计划名唯一化</div>
-      <div class="v">同一<b>期间内跨 BG 全局</b>，一套 <code>(KPI, Curve, 权重)</code> 组合只对应一个计划名（Quota 不计入）。同组合不同名 → 并入既有名并提示；同名不同组合 → 按传入顺序自动加 <code>_v1</code> / <code>_v2</code>。</div>
+      <div class="k">F5 计划名唯一化（v5.0 提升为全库）</div>
+      <div class="v">计划签名 <code>(KPI, Curve, 权重)</code>（Quota 不计入）<b>跨 BG 且跨季度全库唯一</b>——同一组合无论在哪个 BG、哪个季度首次出现，都共用最早登记的名字；同名不同组合按传入顺序自动加 <code>_v1</code> / <code>_v2</code>；预览与执行基于同一份全库快照解析，结果确定一致。</div>
     </div>
     <div class="rule">
-      <div class="k">F1 通知信权重必须 100%</div>
-      <div class="v">通知信导入按 <code>(员工, 期间, 计划)</code> 汇总权重，任一计划合计≠100%（容差 1e-6）→ <b>整员工全部行拒绝、不导入</b>，其余员工照常。<b>计算大表不受此约束</b>（口径仍是加权加总、绝不归一化）。</div>
+      <div class="k">权重≠100% 的处理（v5.0）</div>
+      <div class="v">计算<b>不做拦截、也不归一</b>：结果行记 <code>weight_total_pct</code>；≠100% 时仅在导出「备注」列附一句提示。系统一律不提供未加权（简单平均）支付率。</div>
     </div>
     <div class="rule">
       <div class="k">F2 视图取数范围</div>
@@ -727,7 +728,7 @@ pip install -r requirements.txt
 </section>
 
 <footer>
-  OpenIncentive v5.2 · 生成于 2026-09-27 · 快照基于 v5.1 基线（线上 CHANGELOG 已同步）<br>
+  OpenIncentive v5.2 · 快照基于 2026-10-02 与当前代码校对（15 表 · 34 e2e 步 · /admin/import 唯一大表入口 · letters 不再自带数据）<br>
   仓库：<a href="https://github.com/buckwheat123/OpenIncentive">github.com/buckwheat123/OpenIncentive</a> · 版本历史详见 <a href="../CHANGELOG.md">CHANGELOG.md</a>
 </footer>
 

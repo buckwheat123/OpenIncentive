@@ -23,6 +23,11 @@
 
 - 端到端保持 **34 步全绿**；`manual_test` 清单新增 T1–T11 覆盖上述更新 / 版本化 / 主题 / 视觉精修项，`project_overview` 更新至 v5.2。
 
+### 维护 / Chores（2026-10-02）
+
+- **project_overview v5.2 与代码逐条校对** — v5.0 起 letters 不再自带数据、F1 权重 100% 拦截与 conflicts.csv 均已移除；文档卡片②重写为「校验与留空」（#6 整数 / #7 Curve 停用 / #1 空实绩 / #11 权重≠100% 不拦截）；BG 泳道与 F5 全库唯一范围（跨 BG 且跨季度）修正；模板清单 letters 从 7 页校正为 6 页（无 data.html）、admin 补上 adjust_preview 与 user_status_preview；e2e 步数 33 校正为 34；mailer 说明补上 163 SMTP/POP3 与 `SMTP_DISABLED=1` 降级路径；footer 快照基线更新。
+- **manual_test 数据集与当前代码路径重新对齐** — `data_02/03/04/05` 从年度 / 冲突 / F1 语义的年度格式（走 `/letters/data/*`，路由已移除）改写为大表格式（走 `/admin/import/*`），分别演示 latest-wins、#4 计算时点快照 + UserVersion 归档、#7 Curve 停用引用拒绝、#11 权重≠100% 不拦截 + 导出备注；清单 E/F/G/H 行同步重写；`00_清单_账号与文件说明` 更新文件与用例映射并新增 v5.2 UI 走查段。
+
 ## [v5.1] — 2026-09-26
 
 一次纯视觉及UI升级，整体风格整洁有活力。

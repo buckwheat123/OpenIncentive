@@ -17,15 +17,15 @@ C6,大表导入,错误清单下载,ADMIN1,POST /admin/import/errors.csv,点“�
 D1,F5,预览：改名+加后缀,ADMIN1,POST /admin/import/preview,上传 F5 文件后预览,data_06_plan_uniqueness_F5.csv,含“计划名将从「Beta Plan」改为「Alpha Plan」”（相同组合自动改名）；含“Alpha Plan_v1”（同名不同组合自动加后缀）,,,"组合=(KPI,Curve,权重)，不含 quota；#11 全库范围：跨 BG 且跨季度唯一"
 D2,F5,执行：落库校验,ADMIN1,POST /admin/import/execute,执行 F5 文件,data_06_plan_uniqueness_F5.csv,“导入完成”；E001 与 E002 都落到“Alpha Plan”；E003 落到“Alpha Plan_v1”；库中不存在“Beta Plan”,,,可去 /admin 或直接看库
 D3,F5,跨季度全局唯一（#11）,ADMIN1,POST /admin/import/preview,在一个全新季度、另一 BG 声明与既有组合相同的计划、另起新名,-,提示“计划名将从「新名」改为「最早登记的计划名」”——#11 已扩到跨 BG 且跨季度的全库唯一，不再每季度各自命名,,,#11
-E1,F1,预览：权重≠100%整员工拒绝,ADMIN1,POST /letters/data/preview,上传权重文件后预览,data_05_weight_reject_F1.csv,E002（仅 Revenue 60%）出现“权重合计不是 100%（整个员工拒绝）”；E004（60+40=100）仍显示“可导入”,,,F1 只作用于通知信/年度导入
-E2,F1,执行：只有合规员工落地,ADMIN1,POST /letters/data/execute,执行权重文件,data_05_weight_reject_F1.csv,“计划新版本 1 个”；E004 落地 2028 计划（2 个 KPI）；E002 在 2028 无任何计划（整员工被拒）,,,对照：大表导入不约束权重，见 C 组
-F1a,通知信数据,页面与模板,ADMIN1,GET /letters/data ; GET /letters/data/template.csv,打开通知信数据导入页，下载模板,-,页面含“通知信数据导入”；模板表头不含 actual 列,,,通知信数据不含实绩
-F2a,通知信数据,季度格式预览+执行,ADMIN1,POST /letters/data/preview ; /execute,上传季度格式（带 period 列）文件预览并执行,data_02_letter_quarterly.csv,预览“可导入”；执行“计划新版本 1 个”，E003 2027-Q2 生成 2 个 KPI 且无 actual 写入,,,
-G1,年度导入,年度预填模板,ADMIN1,GET /letters/data/template.csv?year=2026,选年份下载,-,表头以 year 开头，含 ytd_q1..ytd_q4；预填 2026 各计划,,,
-G2,年度导入,一行展开为多季度,ADMIN1,POST /letters/data/preview ; /execute,上传年度文件预览并执行,data_03_letter_year.csv,预览含 2028-Q1 与 2028-Q3、不含 Q2/Q4（空季度跳过）；执行“计划新版本 2 个”，Q1 quota=1000000、Q3 quota=1400000，无 2028-Q2,,,同一年内某 KPI 权重恒定
-H1,冲突,预览：冲突行拦截,ADMIN1,POST /letters/data/preview,上传冲突文件预览,data_04_conflict_year.csv,2026-Q2 行显示“与季度计算数据冲突”（配额与已算不符）；出现“冲突清单”下载按钮；2029-Q1 无冲突可导入,,,以计算(季度大表)为准
-H2,冲突,下载冲突清单,ADMIN1,POST /letters/data/conflicts.csv,点“冲突清单”下载,data_04_conflict_year.csv,CSV 含 existing_q2、系统值 2600000、信件值 999999 的对照,,,
-H3,冲突,执行：只落地不冲突部分,ADMIN1,POST /letters/data/execute,执行冲突文件,data_04_conflict_year.csv,“计划新版本 1 个”（仅 2029-Q1 落地）；2026-Q2 的 Revenue 配额仍=2600000 且版本号不变,,,冲突数据绝不覆盖已算
+E1,权重口径,权重≠100% 不拦截 - 预览,ADMIN1,POST /admin/import/preview,上传 E002 只有 Revenue 60% + E004 Revenue 60 与 Cust-Sat 40 的合并文件预览,data_05_weight_not_100.csv,预览全部标为「可导入」（v5.0 起 F1 通知信 100% 拦截已移除、计算大表从不拦截）；不因权重合计≠100% 拒绝任何行,,,#11 计算不拦截：v5.0 起 F1 移除
+E2,权重口径,权重≠100% 不拦截 - 执行 + 备注,ADMIN1,POST /admin/import/execute ; GET /admin/export.csv?year=2029,执行 data_05，随后一键计算 2029-Q4 并下载「总支付率表」,data_05_weight_not_100.csv,导入「计划新版本 N 个」；E002 权重合计 60 落地；导出结果 CSV 的 E002 行「权重合计」列显示 60.0 且「备注」列附「权重合计非 100%」提示；E004 权重合计 100.0 备注为空,,,#11 结果记 weight_total_pct + 导出备注；口径不拦截不归一
+F1a,大表 latest-wins,同员工同 KPI 后行覆盖前行 - 预览,ADMIN1,POST /admin/import/preview,"上传含重复 (period,employee,plan,kpi) 的多行文件预览",data_02_latest_wins_bigtable.csv,预览逐行标状态，Revenue 与 Cust-Sat 各 2 行、后行覆盖前行；不视为错误、不产生 2 版本,,,#F 表内后行覆盖（v5.0 起 letters 独立数据导入移除）
+F2a,大表 latest-wins,执行 + 校验生效行,ADMIN1,POST /admin/import/execute ; GET /person/{E001},执行 data_02 后打开 E001 2029-Q1 详情,data_02_latest_wins_bigtable.csv,E001 Revenue quota=1800000、Cust-Sat quota=90（各取表内最后一行），而非首行的 1500000 / 95；actual 同理,,,#F latest-wins 结果
+G1,快照,导入含旧部门 - 基线,ADMIN1,POST /admin/import/preview ; /execute ; POST /admin/runs?period=2029-Q2,上传 data_03 首 2 行（部门=Sales North）预览并执行、然后一键计算 2029-Q2,data_03_snapshot_department.csv,导入完成；run 明细里 E003 显示部门=Sales North（记入 snapshot_department）,,,#4 计算时点快照基线（v5.0 起年度格式移除）
+G2,快照,改部门重导入 - 旧季快照不变,ADMIN1,POST /admin/import/preview ; /execute ; POST /admin/runs?period=2029-Q2,再上传同一文件（后 2 行部门=Sales West）执行；对同季度重新计算；对比新旧批次,data_03_snapshot_department.csv,User 侧 E003 部门被就地改为 Sales West（旧值 Sales North 归档为 UserVersion.is_active=False）；旧批次仍显示 snapshot=Sales North，新批次 snapshot=Sales West；/person/{E003} 展示变更历史,,,#4 快照冻结 + 版本化归档
+H1,Curve 停用,停用某 Curve - 前提准备,ADMIN1,POST /admin/curves/{Quality Curve.id}/toggle,在曲线页把 Quality Curve 点「停用」,-,回显「已停用」；列表 Quality Curve 状态变为「停用」；已算/已封存数据不受影响,,,#7 前置：Curve 软下线
+H2,Curve 停用,引用停用 Curve - 预览拒绝,ADMIN1,POST /admin/import/preview,上传 data_04（E001 引用 Standard Curve、E002 引用被停用的 Quality Curve）预览,data_04_curve_retired_reject.csv,E001 行「可导入」；E002 引用 Quality Curve 的行显示「该Curve已停用，请联系ADM」被拦截,,,#7 引用停用 Curve 拒绝新导入
+H3,Curve 停用,重新启用 - 同文件通过,ADMIN1,POST /admin/curves/{Quality Curve.id}/toggle ; POST /admin/import/preview,把 Quality Curve 重新「启用」，再次上传同一 data_04 预览,data_04_curve_retired_reject.csv,所有行「可导入」；执行后 E002 2029-Q3 计划落地,,,#7 重新启用后同一行可再导入
 I1,BG权限,BGA1 多BG模板作用域,BGA1,GET /admin/import/template.csv?period=2026-Q3,BGA1 下载预填模板,-,含 E001(Retail) 与 E004(Commercial)，不含 E900(HR),,,BGA1 管 Retail+Commercial
 I2,BG权限,BGA1 越权行拦截,BGA1,POST /admin/import/preview,上传作用域文件预览,data_07_bg_scope.csv,E001/E004“可导入”，E900 显示“超出本 BG 权限”,,,
 I3,BG权限,BGA2 仅 Retail,BGA2,GET /admin/import/template.csv ; /bg ; POST /admin/import/preview,BGA2 下载模板 / 打开 /bg / 上传作用域文件,data_07_bg_scope.csv,只含 E001；E004 现在也“超出本 BG 权限”；/bg 标题只“零售”、无 E004,,,联席 BG 管理员各自作用域
